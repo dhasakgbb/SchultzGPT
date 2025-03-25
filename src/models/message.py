@@ -21,8 +21,8 @@ class Message:
             "content": self.content
         }
     
-    def to_vector_store_format(self) -> Dict[str, Any]:
-        """Convert message to vector store format with metadata."""
+    def to_retrieval_store_format(self) -> Dict[str, Any]:
+        """Convert message to retrieval store format with metadata."""
         return {
             "text": self.content,
             "metadata": {
@@ -31,6 +31,9 @@ class Message:
                 **self.metadata
             }
         }
+    
+    # Alias for backward compatibility
+    to_vector_store_format = to_retrieval_store_format
     
     def set_metadata(self, key: str, value: Any) -> None:
         """Set metadata for the message."""
@@ -79,7 +82,10 @@ class MessageHistory:
         """Convert all messages to OpenAI API format."""
         return [msg.to_dict() for msg in self.messages]
     
-    def to_vector_store_format(self) -> List[Dict[str, Any]]:
-        """Convert all messages to vector store format."""
-        return [msg.to_vector_store_format() for msg in self.messages 
-                if msg.role != "system"]  # Typically don't store system messages 
+    def to_retrieval_store_format(self) -> List[Dict[str, Any]]:
+        """Convert all messages to retrieval store format."""
+        return [msg.to_retrieval_store_format() for msg in self.messages 
+                if msg.role != "system"]  # Typically don't store system messages
+    
+    # Alias for backward compatibility
+    to_vector_store_format = to_retrieval_store_format 

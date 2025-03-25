@@ -1,6 +1,6 @@
 import os
 import sys
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any, Callable
 
 from rich.console import Console
 from rich.panel import Panel
@@ -8,12 +8,26 @@ from rich.text import Text
 from rich.align import Align
 from rich.rule import Rule
 from rich.box import Box
+from rich.markdown import Markdown
+from rich.prompt import Prompt
+from rich.live import Live
+from rich.layout import Layout
+from rich.table import Table
+
+from config.config import Config
+from src.ui.style_provider import StyleProvider
 
 # Create console for rich text rendering
 console = Console()
 
 class TerminalUI:
     """Terminal user interface components for SchultzGPT"""
+    
+    def __init__(self, message_manager, controller):
+        self.message_manager = message_manager
+        self.controller = controller
+        self.console = console
+        self.style_provider = StyleProvider()
     
     @staticmethod
     def clear_screen():
@@ -56,15 +70,44 @@ class TerminalUI:
     def render_footer(jon_state, message_manager):
         """Render a simple footer with essential status information"""
         try:
-            # Determine memory status
-            if message_manager.vector_store_available:
-                mem_status = "Vector store: Connected"
+            # Determine memory status icon and text
+            if message_manager.retrieval_store_available:
+                mem_icon = "🧠"
+                mem_status = "connected"
             else:
-                mem_status = "Vector store: Disconnected"
-                
-            # Simple status line
-            console.print(f"[dim]{mem_status} | Type /help for commands[/dim]")
+                mem_icon = "💭"
+                mem_status = "limited"
+            
+            # Get mood emoji based on current mood
+            mood = jon_state.mood.lower()
+            mood_emoji = {
+                "neutral": "😐",
+                "happy": "😊",
+                "amused": "😄",
+                "sarcastic": "😏",
+                "cynical": "🙄",
+                "thoughtful": "🤔",
+                "supportive": "👍",
+                "irritated": "😒",
+                "tired": "😴",
+                "spiral": "🌀",
+                "anxious": "😰",
+                "philosophical": "🧐"
+            }.get(mood, "🤖")
+            
+            # Get model name (abbreviated if needed)
+            model_name = Config.FINE_TUNED_MODEL
+            model_short = model_name
+            if len(model_name) > 12:
+                model_short = model_name.split(":")[-1] if ":" in model_name else model_name[:10] + "..."
+            
+            # Build stylish status line with emojis
+            status_line = f"{mood_emoji} jon: {mood} | {mem_icon} memory: {mem_status} | 📝 model: {model_short} | /help for commands"
+            
+            # Display the footer
+            console.print(f"[dim]{status_line}[/dim]")
         except Exception as e:
+            # Fallback status if something fails
             print("Status: Active | Type /help for commands")
 
     @staticmethod
@@ -212,4 +255,137 @@ class TerminalUI:
     @staticmethod
     def render_info(message):
         """Render an informational message"""
-        console.print(f"[yellow]{message}[/yellow]") 
+        console.print(f"[yellow]{message}[/yellow]")
+
+    def render_footer(self) -> None:
+        """Render the footer with status information."""
+        # Get current status
+        storage_status = "connected" if self.message_manager.retrieval_store_available else "disconnected"
+        model_name = self.controller.model_name
+        
+        # Get Jon's current mood
+        mood = self.controller.state.mood
+        
+        # Map moods to emojis
+        mood_emojis = {
+            "happy": "😊",
+            "sad": "😔",
+            "angry": "😠",
+            "confused": "😕",
+            "excited": "😃",
+            "thoughtful": "🤔",
+            "neutral": "😐",
+            "curious": "🧐",
+            "anxious": "😰",
+            "bored": "😒",
+            "suspicious": "🤨",
+            "mischievous": "😏",
+            "surprised": "😮",
+            "tired": "😴",
+            "amused": "😄",
+            "concerned": "🙁",
+            "calm": "😌",
+            "frustrated": "😤",
+            "numb": "😶",
+            "reflective": "🙂"
+        }
+        
+        # Get emoji for current mood
+        mood_emoji = mood_emojis.get(mood.lower(), "😐")
+        
+        # Style for different sections
+        mood_style = self.style_provider.mood_style(mood)
+        storage_style = self.style_provider.status_style(storage_status == "connected")
+        model_style = self.style_provider.model_style(model_name)
+        
+        # Create status line with emojis
+        footer_text = f"{mood_emoji} jon: {self.console.stylize(mood, mood_style)} | 🧠 memory: {self.console.stylize(storage_status, storage_style)} | 📝 model: {self.console.stylize(model_name, model_style)} | /help for commands"
+        
+        # Print the footer with padding
+        footer_width = self.console.width
+        self.console.print("─" * footer_width, style="dim")
+        self.console.print(footer_text, justify="center")
+
+    def render_welcome(self) -> None:
+        """Render the welcome message"""
+        # Create a nice looking welcome panel
+        welcome_text = f"""
+# Welcome to SchultzGPT
+
+A terminal-based AI persona chatbot with OpenAI Retrieval API-backed memory.
+
+- Type a message to start chatting with Jon
+- Type /help to see available commands
+- Press Ctrl+C to exit
+        """
+        
+        panel = Panel(
+            Markdown(welcome_text),
+            title="SchultzGPT",
+            subtitle=f"v{Config.VERSION}",
+            border_style="cyan"
+        )
+        
+        self.console.print(panel)
+    
+    def render_help(self, commands: Dict[str, str]) -> None:
+        """Render the help message with available commands"""
+        # Create a table for commands
+        table = Table(title="Available Commands", show_header=True, header_style="bold")
+        table.add_column("Command", style=self.style_provider.command_style())
+        table.add_column("Description")
+        
+        # Add each command to the table
+        for command, description in commands.items():
+            table.add_row(command, description)
+        
+        # Print the table
+        self.console.print(table)
+    
+    def render_status(self, state) -> None:
+        """Render the current application status"""
+        # Create a table for status information
+        table = Table(title="SchultzGPT Status", show_header=True, header_style="bold")
+        table.add_column("Setting", style="cyan")
+        table.add_column("Value")
+        
+        # Add status information
+        table.add_row("Jon's Mood", state.mood)
+        table.add_row("Context Window Size", str(state.context_window_size))
+        table.add_row("Temperature Modifier", f"{state.temperature_modifier:+.1f}")
+        table.add_row("Caching Enabled", "Yes" if state.caching_enabled else "No")
+        table.add_row("Debug Mode", "Enabled" if state.debug_mode else "Disabled")
+        table.add_row("Retrieval Memory", "Connected" if self.message_manager.retrieval_store_available else "Disconnected")
+        table.add_row("Retrieval Enabled", "Yes" if state.retrieval_store_enabled else "No")
+        table.add_row("Model", self.controller.model_name)
+        
+        # Print the table
+        self.console.print(table)
+    
+    def render_performance(self, metrics: Dict[str, Any]) -> None:
+        """Render performance metrics"""
+        # Create a table for performance metrics
+        table = Table(title="Performance Metrics", show_header=True, header_style="bold")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Value")
+        
+        # Add metrics to the table
+        for metric, value in metrics.items():
+            # Format metrics nicely
+            if metric == "avg_response_time":
+                formatted_value = f"{value:.2f} seconds"
+            elif metric == "total_tokens_used":
+                formatted_value = f"{value:,}"
+            else:
+                formatted_value = str(value)
+            
+            # Convert snake_case to Title Case for display
+            display_metric = " ".join(word.capitalize() for word in metric.split("_"))
+            table.add_row(display_metric, formatted_value)
+        
+        # Print the table
+        self.console.print(table)
+    
+    def get_user_input(self, prompt: str = "You: ") -> str:
+        """Get input from the user"""
+        return Prompt.ask(prompt) 

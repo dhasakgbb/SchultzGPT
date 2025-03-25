@@ -13,8 +13,8 @@ src_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
 sys.path.insert(0, src_path)
 
 # Import components
-from src.controllers.controller import SchultzController
-from src.ui.terminal import TerminalUI, console
+from controllers.controller import SchultzController
+from ui.terminal import TerminalUI, console
 
 
 def setup_environment():
@@ -37,7 +37,7 @@ def setup_environment():
     directories = [
         ".cache",
         ".cache/openai",
-        ".vector_store",
+        ".retrieval_store",
     ]
     
     for directory in directories:

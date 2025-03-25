@@ -28,9 +28,9 @@ class Config:
     MODEL_TEMPERATURE = 1.1
     SPIRAL_TEMPERATURE = 1.5  # Higher temperature for spiral mode
     
-    # Vector Store Configuration
-    VECTOR_STORE_ID = os.getenv("VECTOR_STORE_ID", "jon-memory-store")
-    USE_VECTOR_STORE = True
+    # Retrieval Configuration
+    RETRIEVAL_STORE_ID = os.getenv("OPENAI_ASSISTANT_ID", "jon-memory-assistant")
+    USE_RETRIEVAL_STORE = True
     
     # Debug Settings
     DEBUG = os.getenv("DEBUG", "false").lower() == "true"
@@ -53,7 +53,7 @@ class Config:
         ("/analyze", "Analyze conversation"),
         ("/cache on|off", "Enable/disable prompt caching"),
         ("/cache-stats", "Show prompt cache statistics"),
-        ("/cleanup <days>", "Remove old vectors from store"),
+        ("/cleanup <days>", "Remove old entries from retrieval store"),
         ("/accuracy on|off", "Toggle accuracy optimizations"),
         ("exit/quit", "Exit chat")
     ]

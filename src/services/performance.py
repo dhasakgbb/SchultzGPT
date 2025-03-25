@@ -260,69 +260,151 @@ class PerformanceTracker:
         self.active_timers = {}
 
 
-def timed(tracker: PerformanceTracker, name: Optional[str] = None):
+def timed(func=None, *, name=None, tracker=None):
     """
     Decorator for timing function execution.
     
-    Args:
-        tracker: PerformanceTracker instance
-        name: Optional name for the timer
-        
-    Returns:
-        Decorated function
-        
-    Usage:
-        tracker = PerformanceTracker()
-        
-        @timed(tracker)
+    Can be used either as:
+        @timed
+        def my_function():
+            # ... (requires self.performance_tracker in class)
+            
+        @timed(name="custom_name")
+        def my_function():
+            # ... (requires self.performance_tracker in class)
+            
+        @timed(tracker=my_tracker)
+        def my_function():
+            # ...
+            
+        @timed(name="custom_name", tracker=my_tracker)
         def my_function():
             # ...
     """
-    def decorator(func):
+    if func is None:
+        # Called with parameters - @timed(name="something")
+        def decorator_with_args(fn):
+            @wraps(fn)
+            def wrapper(*args, **kwargs):
+                # Determine which tracker to use
+                nonlocal tracker
+                if tracker is not None:
+                    perf_tracker = tracker
+                else:
+                    # Try to get tracker from self if this is a method
+                    if args and hasattr(args[0], "performance_tracker"):
+                        perf_tracker = args[0].performance_tracker
+                    else:
+                        raise ValueError("No performance tracker available. Pass a tracker explicitly or ensure self.performance_tracker exists.")
+                
+                # Determine timer name
+                nonlocal name
+                timer_name = name or fn.__name__
+                
+                # Start timer and execute function
+                perf_tracker.start_timer(timer_name)
+                try:
+                    result = fn(*args, **kwargs)
+                    perf_tracker.stop_timer(timer_name, success=True)
+                    return result
+                except Exception as e:
+                    perf_tracker.stop_timer(timer_name, success=False)
+                    raise e
+            return wrapper
+        return decorator_with_args
+    else:
+        # Called without parameters - @timed
         @wraps(func)
         def wrapper(*args, **kwargs):
-            timer_name = name or func.__name__
-            tracker.start_timer(timer_name)
+            # Try to get tracker from self if this is a method
+            if args and hasattr(args[0], "performance_tracker"):
+                perf_tracker = args[0].performance_tracker
+            else:
+                raise ValueError("No performance tracker available. Pass a tracker explicitly or ensure self.performance_tracker exists.")
+            
+            # Start timer and execute function
+            timer_name = func.__name__
+            perf_tracker.start_timer(timer_name)
             try:
                 result = func(*args, **kwargs)
-                tracker.stop_timer(timer_name, success=True)
+                perf_tracker.stop_timer(timer_name, success=True)
                 return result
             except Exception as e:
-                tracker.stop_timer(timer_name, success=False)
+                perf_tracker.stop_timer(timer_name, success=False)
                 raise e
         return wrapper
-    return decorator
 
 
-async def async_timed(tracker: PerformanceTracker, name: Optional[str] = None):
+async def async_timed(func=None, *, name=None, tracker=None):
     """
     Decorator for timing async function execution.
     
-    Args:
-        tracker: PerformanceTracker instance
-        name: Optional name for the timer
-        
-    Returns:
-        Decorated async function
-        
-    Usage:
-        tracker = PerformanceTracker()
-        
-        @async_timed(tracker)
-        async def my_async_function():
+    Can be used either as:
+        @async_timed
+        async def my_function():
+            # ... (requires self.performance_tracker in class)
+            
+        @async_timed(name="custom_name")
+        async def my_function():
+            # ... (requires self.performance_tracker in class)
+            
+        @async_timed(tracker=my_tracker)
+        async def my_function():
+            # ...
+            
+        @async_timed(name="custom_name", tracker=my_tracker)
+        async def my_function():
             # ...
     """
-    def decorator(func):
+    if func is None:
+        # Called with parameters - @async_timed(name="something")
+        def decorator_with_args(fn):
+            @wraps(fn)
+            async def wrapper(*args, **kwargs):
+                # Determine which tracker to use
+                nonlocal tracker
+                if tracker is not None:
+                    perf_tracker = tracker
+                else:
+                    # Try to get tracker from self if this is a method
+                    if args and hasattr(args[0], "performance_tracker"):
+                        perf_tracker = args[0].performance_tracker
+                    else:
+                        raise ValueError("No performance tracker available. Pass a tracker explicitly or ensure self.performance_tracker exists.")
+                
+                # Determine timer name
+                nonlocal name
+                timer_name = name or fn.__name__
+                
+                # Start timer and execute function
+                perf_tracker.start_timer(timer_name)
+                try:
+                    result = await fn(*args, **kwargs)
+                    perf_tracker.stop_timer(timer_name, success=True)
+                    return result
+                except Exception as e:
+                    perf_tracker.stop_timer(timer_name, success=False)
+                    raise e
+            return wrapper
+        return decorator_with_args
+    else:
+        # Called without parameters - @async_timed
         @wraps(func)
         async def wrapper(*args, **kwargs):
-            timer_name = name or func.__name__
-            tracker.start_timer(timer_name)
+            # Try to get tracker from self if this is a method
+            if args and hasattr(args[0], "performance_tracker"):
+                perf_tracker = args[0].performance_tracker
+            else:
+                raise ValueError("No performance tracker available. Pass a tracker explicitly or ensure self.performance_tracker exists.")
+            
+            # Start timer and execute function
+            timer_name = func.__name__
+            perf_tracker.start_timer(timer_name)
             try:
                 result = await func(*args, **kwargs)
-                tracker.stop_timer(timer_name, success=True)
+                perf_tracker.stop_timer(timer_name, success=True)
                 return result
             except Exception as e:
-                tracker.stop_timer(timer_name, success=False)
+                perf_tracker.stop_timer(timer_name, success=False)
                 raise e
-        return wrapper
-    return decorator 
+        return wrapper 
