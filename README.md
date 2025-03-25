@@ -1,20 +1,18 @@
 # SchultzGPT
 
-A personalized AI chatbot trained on conversation data to emulate natural dialogue. Built with Python and OpenAI's GPT-3.5 Turbo.
+A terminal-based AI persona chatbot with vector store-backed memory.
 
 ## Features
 
-- 💬 Natural conversation flow with context awareness
-- 🔍 Semantic search for relevant responses
-- ⚡ Real-time streaming responses
-- 👍 User feedback system
-- 💾 Response saving functionality
-- 🎨 Clean, terminal-based interface
-- 🤖 Character-specific personality emulation
-- 📊 Synthetic data generation for training
-- 🎯 Authentic texting style simulation
+- Terminal-based UI with rich text formatting
+- Conversation memory using vector embeddings
+- Asynchronous API processing for improved performance
+- Performance tracking and metrics
+- Conversation summarization for long-term context
+- Smart context retrieval for more relevant responses
+- Configurable via environment variables
 
-## Setup
+## Installation
 
 1. Clone the repository:
 ```bash
@@ -22,73 +20,85 @@ git clone https://github.com/yourusername/SchultzGPT.git
 cd SchultzGPT
 ```
 
-2. Install dependencies:
+2. Set up a virtual environment (optional but recommended):
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+3. Install the dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Create a `.env` file with your OpenAI API key:
-```env
+4. Create a `.env` file with your API keys (or copy from .env.example):
+```
 OPENAI_API_KEY=your_api_key_here
-CURRENT_MODEL_ID=ft:gpt-3.5-turbo-0125:personal::BEqahUc4
 ```
-
-4. Run the application:
-```bash
-python schultz.py
-```
-
-## Project Structure
-
-- `schultz.py` - Main application file
-- `requirements.txt` - Python dependencies
-- `jon_embed.json` - Embeddings data for semantic search
-- `feedback.jsonl` - User feedback storage
-- `synthetic_prompts.jsonl` - Generated conversation starters
-- `generate_jon_synthetic.py` - Synthetic data generation script
-- `.env` - Environment variables
-
-## Technical Details
-
-- Terminal-based interface with rich text formatting
-- Uses OpenAI's GPT-3.5 Turbo fine-tuned model
-- Implements semantic search using text embeddings
-- Token-aware context management
-- Real-time response streaming
-- Persistent feedback storage
-- Character-specific style emulation
-- Synthetic data generation with authentic texting patterns
 
 ## Usage
 
-1. Start the application using `python schultz.py`
-2. Type your message and press Enter
-3. Receive AI-generated responses
-4. Provide feedback using 👍/👎 buttons
-5. Save important responses using the ★ button
+Run the application using:
 
-## Development
+```bash
+./run.py
+```
 
-### Synthetic Data Generation
+Or install as a package:
 
-The project includes tools for generating synthetic conversation data that maintains authentic texting patterns:
-- Realistic typos and common texting mistakes
-- Natural filler words and expressions
-- Character-specific vocabulary and style
-- Contextually appropriate responses
+```bash
+pip install -e .
+schultzgpt
+```
 
-### Character Emulation
+## Commands
 
-The chatbot is designed to emulate specific character traits:
-- Authentic texting style
-- Consistent personality traits
-- Natural conversation flow
-- Context-aware responses
+The application supports the following commands:
 
-## Contributing
+- `/help` - Show available commands
+- `/clear` - Clear the terminal screen
+- `/exit` - Exit the application
+- `/reset` - Reset the conversation history
+- `/toggle-cache` - Toggle response caching on/off
+- `/toggle-debug` - Toggle debug mode on/off
+- `/toggle-vector` - Toggle vector store on/off
+- `/context` - Show current context window size
+- `/set-context <size>` - Set context window size
+- `/set-temp <value>` - Set temperature modifier (-0.5 to 0.5)
+- `/performance` - Show performance metrics
+- `/clear-metrics` - Clear performance metrics
+- `/status` - Show application status
+- `/summarize` - Summarize the conversation
+- `/reindex` - Rebuild the vector store from conversation history
 
-Feel free to submit issues and enhancement requests! 
+## Architecture
+
+SchultzGPT is built with a clean, modular architecture:
+
+- `src/` - Main source code directory
+  - `models/` - Data models and state management
+    - `message.py` - Message data structures
+    - `state.py` - Application state and caching
+  - `services/` - Core functionality
+    - `message_manager.py` - Unified conversation and message handling
+    - `openai.py` - OpenAI API integration
+    - `vector_store.py` - Vector-based semantic search
+    - `performance.py` - Performance tracking
+  - `controllers/` - Application logic
+    - `controller.py` - Main controller coordinating services
+  - `ui/` - User interface components
+    - `terminal.py` - Terminal-based UI
+  - `config/` - Configuration settings
+    - `config.py` - Application constants and settings
+- `run.py` - Main entry point
+
+## Performance Features
+
+- Asynchronous API processing
+- Response caching
+- Performance tracking with detailed metrics
+- Vector store for semantic search
 
 ## License
 
-MIT License - feel free to use this project for your own purposes. 
+MIT 

@@ -1,5 +1,6 @@
-openai
+openai==1.11.0
 Pillow
-python-dotenv
-numpy
-tiktoken 
+python-dotenv==1.0.0
+rich==13.4.2
+numpy==1.24.3
+tiktoken==0.5.2 
