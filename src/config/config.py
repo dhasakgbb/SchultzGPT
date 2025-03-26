@@ -5,36 +5,54 @@ Contains all settings, constants, and environment variable loading.
 
 import os
 from dotenv import load_dotenv
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 # Load environment variables
 load_dotenv()
+
+# OpenAI API configuration
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_ORG_ID = os.getenv("OPENAI_ORG_ID")
+
+# Output directory for data generation
+OUTPUT_DIR = os.getenv("OUTPUT_DIR", "data_generation/output")
+
+# Jon's persona configuration
+PERSONA = """Jon is a millennial who works at a retirement community. He's married to Chelsea (a therapist) and has two cats. He's dealing with relationship issues and currently lives in his mom's basement. He has dyslexia but loves reading fantasy books like Game of Thrones. He enjoys being a dungeon master for D&D games and playing video games in the evening. He's afraid of both driving and flying. He has big dreams but often struggles with follow-through. He shows codependent tendencies and has an anxious attachment style in relationships. He can be mopey and get stuck in negative thought patterns, but he's also self-aware and working on personal growth through therapy. He loves meat and barbecue, and occasionally enjoys cigars and scotch."""
 
 class Config:
     """Configuration class for SchultzGPT"""
     
     # API Settings
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-    FINE_TUNED_MODEL = os.getenv("FINE_TUNED_MODEL", "gpt-4o")
-    EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+    OPENAI_ORG_ID: str = os.getenv("OPENAI_ORG_ID", "")
+    FINE_TUNED_MODEL = os.getenv("FINE_TUNED_MODEL", "gpt-4-turbo-preview")
     
-    # Context Settings
+    # Data Generation Settings
+    OUTPUT_DIR: str = os.getenv("OUTPUT_DIR", "data_generation/output")
+    MEMORY_LOGS_DIR = os.getenv("MEMORY_LOGS_DIR", "memory_logs")
+    DEFAULT_CHECKPOINT_SIZE = int(os.getenv("DEFAULT_CHECKPOINT_SIZE", "100"))
+    DEFAULT_BATCH_SIZE = int(os.getenv("DEFAULT_BATCH_SIZE", "20"))
+    CHECKPOINT_FREQUENCY: int = int(os.getenv("CHECKPOINT_FREQUENCY", "10"))
+    CHECKPOINT_DIR: str = os.getenv("CHECKPOINT_DIR", "checkpoints")
+    
+    # Model Settings
     MAX_TOKENS = int(os.getenv("MAX_TOKENS", "4096"))
     RESPONSE_TOKENS = int(os.getenv("RESPONSE_TOKENS", "150"))
     CONTEXT_TOKENS = int(os.getenv("CONTEXT_TOKENS", "1000"))
-    HISTORY_MESSAGES = 6
-    SIMILAR_RESPONSES = 5
-    SIMILARITY_THRESHOLD = 0.7
-    MODEL_TEMPERATURE = 1.1
-    SPIRAL_TEMPERATURE = 1.5  # Higher temperature for spiral mode
+    MODEL_TEMPERATURE = float(os.getenv("MODEL_TEMPERATURE", "0.7"))
+    SPIRAL_TEMPERATURE = float(os.getenv("SPIRAL_TEMPERATURE", "1.5"))
     
-    # Retrieval Configuration
-    RETRIEVAL_STORE_ID = os.getenv("OPENAI_ASSISTANT_ID", "jon-memory-assistant")
-    USE_RETRIEVAL_STORE = True
+    # Retrieval API Settings
+    RETRIEVAL_MODEL: str = os.getenv("RETRIEVAL_MODEL", "gpt-4-turbo-preview")
+    RETRIEVAL_TEMPERATURE: float = float(os.getenv("RETRIEVAL_TEMPERATURE", "0.7"))
+    RETRIEVAL_ASSISTANT_ID: str = os.getenv("RETRIEVAL_ASSISTANT_ID", "")
+    USE_RETRIEVAL_API = True
     
     # Debug Settings
-    DEBUG = os.getenv("DEBUG", "false").lower() == "true"
+    DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
     PERFORMANCE_TRACKING = os.getenv("PERFORMANCE_TRACKING", "true").lower() == "true"
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     
     # Accuracy optimization features
     ACCURACY_FEATURES = {

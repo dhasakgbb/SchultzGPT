@@ -5,12 +5,15 @@ Jon Tools - Unified CLI for SchultzGPT Data Tools
 This script provides a unified interface to all the Jon data generation,
 loading, and management tools through subcommands.
 
+The data generation now uses OpenAI's official Batch API for efficient bulk generation 
+when one-shot generation is enabled and the client supports it. This significantly improves
+performance for large generation jobs and reduces API call overhead.
+
 Usage:
-    python -m data_generation.jon_tools generate --qa-pairs 100 --batch-size 10
+    python -m data_generation.jon_tools generate --qa-pairs 1000 --one-shot --batch-size 15 --max-concurrent 10
     python -m data_generation.jon_tools load --file data/jon_retrieval_data.jsonl
     python -m data_generation.jon_tools train --file data/jon_fine_tuning.jsonl
     python -m data_generation.jon_tools assistants list
-    python -m data_generation.jon_tools visualize --input data/jon_raw_data.json
     python -m data_generation.jon_tools test --file data/jon_retrieval_data.jsonl --interactive
 """
 
@@ -19,6 +22,7 @@ import sys
 import argparse
 import importlib
 from typing import Dict, List, Any, Optional, Callable
+import traceback
 
 # Add src to path for imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -26,17 +30,15 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 # Import tools using relative imports
 try:
     from data_generation.generation.jon_data_generator import main as generate_main
-    from data_generation.loading.load_jon_data import main as load_vector_main
     from data_generation.loading.load_jon_retrieval import main as load_retrieval_main
     from data_generation.training.prepare_fine_tuning import main as prepare_ft_main
     from data_generation.training.monitor_jobs import main as monitor_jobs_main
     from data_generation.utils.test_jon_data import main as test_main
     from data_generation.loading.manage_assistants import main as manage_assistants_main
-    from data_generation.visualization.visualize_memory import main as visualize_main
-    from data_generation.migration.migrate_vector_to_retrieval import main as migrate_main
 except ImportError as e:
     # Unable to import from the new structure
     print(f"Error importing module: {str(e)}")
+    print(f"Error location: {traceback.format_exc()}")
     print("The files have been moved to their respective subdirectories.")
     print("Please run this script from the project root:")
     print("python -m data_generation.jon_tools [command]")
@@ -50,17 +52,23 @@ def setup_generate_parser(subparsers):
     )
     
     # Data generation arguments
-    generate_parser.add_argument("--qa-pairs", type=int, default=100, help="Number of Q&A pairs to generate")
-    generate_parser.add_argument("--conversations", type=int, default=20, help="Number of conversations to generate")
-    generate_parser.add_argument("--statements", type=int, default=50, help="Number of standalone Jon statements to generate")
-    generate_parser.add_argument("--batch-size", type=int, default=10, help="Number of items per API call")
+    generate_parser.add_argument("--qa-pairs", type=int, default=1000, help="Number of QA pairs to generate")
+    generate_parser.add_argument("--conversations", type=int, default=100, help="Number of conversations to generate")
+    generate_parser.add_argument("--statements", type=int, default=150, help="Number of statements to generate")
+    generate_parser.add_argument("--temperature", type=float, default=0.85, help="Temperature for generation")
+    generate_parser.add_argument("--batch-size", type=int, default=15, help="Batch size for parallel/bulk generation")
+    generate_parser.add_argument("--max-concurrent", type=int, default=8, help="Maximum concurrent batch requests")
     generate_parser.add_argument("--variations", type=int, default=2, help="Number of contextual variations per Q&A pair")
-    generate_parser.add_argument("--contrastive", action="store_true", help="Generate contrastive examples")
     generate_parser.add_argument("--output-dir", type=str, default="data_generation/output", help="Output directory")
-    generate_parser.add_argument("--optimize-chunks", action="store_true", help="Optimize chunk sizes for embedding performance")
     generate_parser.add_argument("--parallel", action="store_true", help="Use parallel processing for generation")
-    generate_parser.add_argument("--dynamic-batching", action="store_true", help="Dynamically adjust batch sizes")
+    generate_parser.add_argument("--dynamic-batching", action="store_true", help="Use dynamic batch sizing")
     generate_parser.add_argument("--enrich-metadata", action="store_true", help="Add enhanced metadata to generated items")
+    generate_parser.add_argument("--one-shot", action="store_true", help="Use one-shot bulk generation (default for large datasets)")
+    generate_parser.add_argument("--use-real-data", action="store_true", help="Use real Jon data for examples")
+    generate_parser.add_argument("--verify", action="store_true", help="Verify output data")
+    generate_parser.add_argument("--checkpoint", type=int, default=100, dest="checkpoint_frequency", help="Save checkpoints every N items")
+    generate_parser.add_argument("--incremental-save", action="store_true", help="Save data incrementally for large generations")
+    generate_parser.add_argument("--dry-run", action="store_true", help="Skip retrieval store functionality")
     
     return generate_parser
 
@@ -68,16 +76,13 @@ def setup_load_parser(subparsers):
     """Set up the parser for the load command"""
     load_parser = subparsers.add_parser(
         'load', 
-        help='Load data into vector store or retrieval API'
+        help='Load data into the Retrieval API'
     )
     
     # Add load arguments
     load_parser.add_argument("--file", type=str, required=True, help="Path to the data file to load")
-    load_parser.add_argument("--target", type=str, choices=["vector", "retrieval"], default="retrieval",
-                            help="Where to load the data (legacy vector store or retrieval API)")
     load_parser.add_argument("--dry-run", action="store_true", help="Validate without loading")
-    load_parser.add_argument("--store-dir", type=str, help="Vector store directory (for vector target)")
-    load_parser.add_argument("--assistant-id", type=str, help="Assistant ID (for retrieval target)")
+    load_parser.add_argument("--assistant-id", type=str, help="Assistant ID for loading")
     load_parser.add_argument("--batch-size", type=int, default=20, help="Batch size for retrieval API loads")
     
     return load_parser
@@ -147,23 +152,6 @@ def setup_assistants_parser(subparsers):
     
     return assistants_parser
 
-def setup_visualize_parser(subparsers):
-    """Set up the parser for the visualize command"""
-    visualize_parser = subparsers.add_parser(
-        'visualize', 
-        help='Visualize Jon\'s memory structure'
-    )
-    
-    visualize_parser.add_argument("--assistant-id", type=str, help="Assistant ID to visualize")
-    visualize_parser.add_argument("--input", "-i", type=str, help="Input file with memory data (JSON/JSONL)")
-    visualize_parser.add_argument("--output", "-o", type=str, help="Output directory for visualizations")
-    visualize_parser.add_argument("--format", type=str, choices=["html", "png", "json"], 
-                              default="html", help="Output format")
-    visualize_parser.add_argument("--type", type=str, choices=["graph", "topics", "sentiment", "dashboard", "all"],
-                              default="all", help="Type of visualization to generate")
-    
-    return visualize_parser
-
 def setup_test_parser(subparsers):
     """Set up the parser for the test command"""
     test_parser = subparsers.add_parser(
@@ -181,325 +169,43 @@ def setup_test_parser(subparsers):
     
     return test_parser
 
-def setup_migrate_parser(subparsers):
-    """Set up the parser for the migrate command"""
-    migrate_parser = subparsers.add_parser(
-        'migrate', 
-        help='Migrate data from vector store to retrieval API'
-    )
-    
-    migrate_parser.add_argument("--vector-dir", type=str, default="vector_store", help="Vector store directory")
-    migrate_parser.add_argument("--assistant-id", type=str, help="Assistant ID to use (creates new one if not provided)")
-    migrate_parser.add_argument("--batch-size", type=int, default=20, help="Batch size for uploads")
-    migrate_parser.add_argument("--dry-run", action="store_true", help="Don't upload, just show what would be uploaded")
-    
-    return migrate_parser
-
-def handle_generate(args):
-    """Handle the generate command"""
-    # Convert args to sys.argv format for the original script
-    sys_args = ["data_generation.generation.jon_data_generator"]
-    
-    if args.qa_pairs is not None:
-        sys_args.extend(["--qa-pairs", str(args.qa_pairs)])
-    if args.conversations is not None:
-        sys_args.extend(["--conversations", str(args.conversations)])
-    if args.statements is not None:
-        sys_args.extend(["--statements", str(args.statements)])
-    if args.batch_size is not None:
-        sys_args.extend(["--batch-size", str(args.batch_size)])
-    if args.variations is not None:
-        sys_args.extend(["--variations", str(args.variations)])
-    if args.contrastive:
-        sys_args.append("--contrastive")
-    if args.output_dir is not None:
-        sys_args.extend(["--output-dir", args.output_dir])
-    if args.optimize_chunks:
-        sys_args.append("--optimize-chunks")
-    if args.parallel:
-        sys_args.append("--parallel")
-    if args.dynamic_batching:
-        sys_args.append("--dynamic-batching")
-    if args.enrich_metadata:
-        sys_args.append("--enrich-metadata")
-    
-    # Temporarily replace sys.argv
-    old_argv = sys.argv
-    sys.argv = sys_args
-    
-    try:
-        # Call the original main function
-        generate_main()
-    finally:
-        # Restore sys.argv
-        sys.argv = old_argv
-
-def handle_load(args):
-    """Handle the load command"""
-    if args.target == "vector":
-        # Vector store loading
-        sys_args = ["data_generation.loading.load_jon_data", "--file", args.file]
-        
-        if args.dry_run:
-            sys_args.append("--dry-run")
-        if args.store_dir:
-            sys_args.extend(["--store-dir", args.store_dir])
-        
-        # Temporarily replace sys.argv
-        old_argv = sys.argv
-        sys.argv = sys_args
-        
-        try:
-            # Call the original main function
-            load_vector_main()
-        finally:
-            # Restore sys.argv
-            sys.argv = old_argv
-    else:
-        # Retrieval API loading
-        sys_args = ["data_generation.loading.load_jon_retrieval", "--file", args.file]
-        
-        if args.dry_run:
-            sys_args.append("--dry-run")
-        if args.assistant_id:
-            sys_args.extend(["--assistant-id", args.assistant_id])
-        if args.batch_size is not None:
-            sys_args.extend(["--batch-size", str(args.batch_size)])
-        
-        # Temporarily replace sys.argv
-        old_argv = sys.argv
-        sys.argv = sys_args
-        
-        try:
-            # Call the original main function
-            load_retrieval_main()
-        finally:
-            # Restore sys.argv
-            sys.argv = old_argv
-
-def handle_train(args):
-    """Handle the train command"""
-    if args.train_cmd == "prepare":
-        # Prepare fine-tuning data
-        sys_args = ["data_generation.training.prepare_fine_tuning", "--file", args.file]
-        
-        if args.output:
-            sys_args.extend(["--output", args.output])
-        if args.test_split is not None:
-            sys_args.extend(["--test-split", str(args.test_split)])
-        if args.fine_tune:
-            sys_args.append("--fine-tune")
-            if args.model:
-                sys_args.extend(["--model", args.model])
-            if args.suffix:
-                sys_args.extend(["--suffix", args.suffix])
-        
-        # Temporarily replace sys.argv
-        old_argv = sys.argv
-        sys.argv = sys_args
-        
-        try:
-            # Call the original main function
-            prepare_ft_main()
-        finally:
-            # Restore sys.argv
-            sys.argv = old_argv
-    else:
-        # Monitor jobs commands
-        if args.train_cmd == "list":
-            sys_args = ["data_generation.training.monitor_jobs", "list"]
-            if args.limit:
-                sys_args.extend(["--limit", str(args.limit)])
-        elif args.train_cmd == "status":
-            sys_args = ["data_generation.training.monitor_jobs", "status", args.job_id]
-            if args.register:
-                sys_args.append("--register")
-        elif args.train_cmd == "cancel":
-            sys_args = ["data_generation.training.monitor_jobs", "cancel", args.job_id]
-        
-        # Temporarily replace sys.argv
-        old_argv = sys.argv
-        sys.argv = sys_args
-        
-        try:
-            # Call the original main function
-            monitor_jobs_main()
-        finally:
-            # Restore sys.argv
-            sys.argv = old_argv
-
-def handle_assistants(args):
-    """Handle the assistants command"""
-    # Map commands to monitor_jobs.py commands
-    if args.assistants_cmd == "list":
-        sys_args = ["data_generation.loading.manage_assistants", "list"]
-        if args.limit:
-            sys_args.extend(["--limit", str(args.limit)])
-    elif args.assistants_cmd == "details":
-        sys_args = ["data_generation.loading.manage_assistants", "details", "--id", args.id]
-    elif args.assistants_cmd == "create":
-        sys_args = ["data_generation.loading.manage_assistants", "create", "--name", args.name]
-        if args.model:
-            sys_args.extend(["--model", args.model])
-        if args.instructions:
-            sys_args.extend(["--instructions", args.instructions])
-        if args.save:
-            sys_args.append("--save")
-    elif args.assistants_cmd == "clean":
-        sys_args = ["data_generation.loading.manage_assistants", "clean", "--id", args.id]
-        if args.age:
-            sys_args.extend(["--age", str(args.age)])
-        if args.dry_run:
-            sys_args.append("--dry-run")
-    
-    # Temporarily replace sys.argv
-    old_argv = sys.argv
-    sys.argv = sys_args
-    
-    try:
-        # Call the original main function
-        manage_assistants_main()
-    finally:
-        # Restore sys.argv
-        sys.argv = old_argv
-
-def handle_visualize(args):
-    """Handle the visualize command"""
-    sys_args = ["data_generation.visualization.visualize_memory"]
-    
-    if args.assistant_id:
-        sys_args.extend(["--assistant-id", args.assistant_id])
-    if args.input:
-        sys_args.extend(["--input", args.input])
-    if args.output:
-        sys_args.extend(["--output", args.output])
-    if args.format:
-        sys_args.extend(["--format", args.format])
-    if args.type:
-        sys_args.extend(["--type", args.type])
-    
-    # Temporarily replace sys.argv
-    old_argv = sys.argv
-    sys.argv = sys_args
-    
-    try:
-        # Call the original main function
-        visualize_main()
-    finally:
-        # Restore sys.argv
-        sys.argv = old_argv
-
-def handle_test(args):
-    """Handle the test command"""
-    sys_args = ["data_generation.utils.test_jon_data"]
-    
-    if args.file:
-        sys_args.extend(["--file", args.file])
-    if args.type:
-        sys_args.extend(["--type", args.type])
-    if args.interactive:
-        sys_args.append("--interactive")
-    if args.model:
-        sys_args.extend(["--model", args.model])
-    if args.assistant_id:
-        sys_args.extend(["--assistant-id", args.assistant_id])
-    if args.limit:
-        sys_args.extend(["--limit", str(args.limit)])
-    
-    # Temporarily replace sys.argv
-    old_argv = sys.argv
-    sys.argv = sys_args
-    
-    try:
-        # Call the original main function
-        test_main()
-    finally:
-        # Restore sys.argv
-        sys.argv = old_argv
-
-def handle_migrate(args):
-    """Handle the migrate command"""
-    if migrate_main is None:
-        print("Error: Migration tool is not available in this installation.")
-        print("Please try updating your SchultzGPT installation.")
-        return
-    
-    sys_args = ["data_generation.migration.migrate_vector_to_retrieval"]
-    
-    if args.vector_dir:
-        sys_args.extend(["--vector-dir", args.vector_dir])
-    if args.assistant_id:
-        sys_args.extend(["--assistant-id", args.assistant_id])
-    if args.batch_size:
-        sys_args.extend(["--batch-size", str(args.batch_size)])
-    if args.dry_run:
-        sys_args.append("--dry-run")
-    
-    # Temporarily replace sys.argv
-    old_argv = sys.argv
-    sys.argv = sys_args
-    
-    try:
-        # Call the original main function
-        migrate_main()
-    finally:
-        # Restore sys.argv
-        sys.argv = old_argv
-
 def main():
-    """Main entry point for the script"""
-    # Set up the argument parser
+    """Main entry point for the CLI"""
     parser = argparse.ArgumentParser(
-        description="Jon Tools - Unified CLI for SchultzGPT Data Tools",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python -m data_generation.jon_tools generate --qa-pairs 100 --batch-size 10
-  python -m data_generation.jon_tools load --file data/jon_retrieval_data.jsonl
-  python -m data_generation.jon_tools train prepare --file data/jon_fine_tuning.jsonl
-  python -m data_generation.jon_tools train list
-  python -m data_generation.jon_tools train status ft-abc123 --register
-  python -m data_generation.jon_tools assistants list
-  python -m data_generation.jon_tools assistants create --name "Jon Memory" --save
-  python -m data_generation.jon_tools visualize --input data/jon_raw_data.json
-  python -m data_generation.jon_tools test --file data/jon_retrieval_data.jsonl --interactive
-  python -m data_generation.jon_tools migrate --vector-dir vector_store --dry-run
-        """
+        description="Unified CLI for Jon data tools",
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
     
-    # Add subparsers for the various commands
-    subparsers = parser.add_subparsers(dest='command', required=True)
+    subparsers = parser.add_subparsers(dest='command', help='Available commands')
     
-    # Set up parsers for each command
-    generate_parser = setup_generate_parser(subparsers)
-    load_parser = setup_load_parser(subparsers)
-    train_parser = setup_train_parser(subparsers)
-    assistants_parser = setup_assistants_parser(subparsers)
-    visualize_parser = setup_visualize_parser(subparsers)
-    test_parser = setup_test_parser(subparsers)
-    
-    # Only set up migrate parser if the migrate function is available
-    if migrate_main is not None:
-        migrate_parser = setup_migrate_parser(subparsers)
+    # Set up command parsers
+    setup_generate_parser(subparsers)
+    setup_load_parser(subparsers)
+    setup_train_parser(subparsers)
+    setup_assistants_parser(subparsers)
+    setup_test_parser(subparsers)
     
     # Parse arguments
     args = parser.parse_args()
     
-    # Handle the specified command
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+        
+    # Execute command
     if args.command == 'generate':
-        handle_generate(args)
+        generate_main(args)
     elif args.command == 'load':
-        handle_load(args)
+        load_retrieval_main(args)
     elif args.command == 'train':
-        handle_train(args)
+        if args.train_cmd == 'prepare':
+            prepare_ft_main(args)
+        elif args.train_cmd == 'list' or args.train_cmd == 'status' or args.train_cmd == 'cancel':
+            monitor_jobs_main(args)
     elif args.command == 'assistants':
-        handle_assistants(args)
-    elif args.command == 'visualize':
-        handle_visualize(args)
+        manage_assistants_main(args)
     elif args.command == 'test':
-        handle_test(args)
-    elif args.command == 'migrate' and migrate_main is not None:
-        handle_migrate(args)
+        test_main(args)
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main() 

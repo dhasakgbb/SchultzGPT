@@ -5,21 +5,25 @@ Setup script for SchultzGPT.
 
 from setuptools import setup, find_packages
 
-with open("requirements.txt") as f:
-    requirements = f.read().splitlines()
-
 setup(
     name="schultzgpt",
-    version="0.1.0",
-    description="A terminal-based AI persona chatbot with vector store memory",
-    author="Damian",
-    package_dir={"": "src"},
-    packages=["config", "controllers", "models", "services", "ui"],
-    install_requires=requirements,
+    version="2.0.0",
+    description="A terminal-based AI persona chatbot with OpenAI Retrieval API memory",
+    author="Damian Schultz",
+    author_email="damianschultz@gmail.com",
+    packages=find_packages(),
+    install_requires=[
+        "openai>=1.0.0",
+        "python-dotenv>=0.19.0",
+        "tqdm>=4.65.0",
+        "tabulate>=0.9.0",
+        "psutil>=5.9.0",
+        "tiktoken>=0.5.0"
+    ],
     python_requires=">=3.8",
     entry_points={
         "console_scripts": [
-            "schultzgpt=run:main",
+            "schultzgpt=src.main:main",
         ],
     },
 ) 

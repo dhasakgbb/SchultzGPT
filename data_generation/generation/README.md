@@ -1,30 +1,68 @@
-# Jon Data Generation
+# Generation
 
-This directory contains the scripts responsible for generating synthetic Jon data for various purposes including:
+Core data generation code for SchultzGPT. This module generates synthetic Jon data in various formats for use with the OpenAI Retrieval API and fine-tuning.
 
-- Question & Answer pairs for the vector store (legacy)
-- Q&A pairs for the OpenAI Retrieval API
-- Complete conversations for fine-tuning
-- Standalone statements for embeddings
+## Features
 
-## Main Script
+- Q&A pair generation with rich metadata
+- Conversation generation for fine-tuning
+- Standalone statement generation
+- Automatic checkpointing and recovery
+- Output verification
+- Real data integration for improved quality
 
-The main script is `jon_data_generator.py`, which handles all data generation tasks with various options:
+## Usage
 
 ```bash
-# Generate data with default settings
-python -m data_generation.generation.jon_data_generator
+# Generate Q&A pairs
+python jon_data_generator.py --qa-pairs 10
 
-# Generate specific amounts of data
-python -m data_generation.generation.jon_data_generator --qa-pairs 200 --conversations 50 --statements 300
+# Generate conversations
+python jon_data_generator.py --conversations 5
+
+# Generate statements
+python jon_data_generator.py --statements 20
+
+# Use real data examples
+python jon_data_generator.py --qa-pairs 10 --use-real-data
+
+# Set checkpoint frequency
+python jon_data_generator.py --qa-pairs 100 --checkpoint-interval 10
+
+# Verify output
+python jon_data_generator.py --qa-pairs 10 --verify
 ```
 
-## Advanced Features
+## Output Formats
 
-- **Bulk Generation**: Reduces API calls by generating multiple items per prompt
-- **Parallel Processing**: Generates data in parallel for faster completion
-- **Dynamic Batch Sizing**: Optimizes batch sizes based on content complexity
-- **Enhanced Metadata**: Enriches data with detailed metadata for better retrieval
-- **Data Quality Metrics**: Analyzes and reports on the quality of generated data
+1. Raw JSON
+   - Complete data with metadata
+   - Used for analysis and debugging
 
-For more details, see the main [Jon Data Generation Toolkit README](../README.md). 
+2. Retrieval JSONL
+   - Formatted for OpenAI Retrieval API
+   - Optimized for semantic search
+
+3. Fine-tuning JSONL
+   - Formatted for model training
+   - Includes conversation context
+
+## Quality Assurance
+
+The generator ensures high-quality data through:
+
+1. Rich metadata generation
+2. Topic clustering
+3. Entity tracking
+4. Sentiment analysis
+5. Style consistency checks
+
+## Configuration
+
+Key settings in `.env`:
+
+```
+OUTPUT_DIR=data_generation/output
+CHECKPOINT_FREQUENCY=10
+CHECKPOINT_DIR=checkpoints
+``` 

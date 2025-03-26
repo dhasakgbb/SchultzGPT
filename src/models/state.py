@@ -75,13 +75,7 @@ class SchultzState:
             )
             self.caching_enabled = state_data.get("caching_enabled", True)
             self.debug_mode = state_data.get("debug_mode", False)
-            
-            # Handle both old and new keys for backward compatibility
-            self.retrieval_store_enabled = state_data.get(
-                "retrieval_store_enabled", 
-                state_data.get("vector_store_enabled", True)
-            )
-            
+            self.retrieval_store_enabled = state_data.get("retrieval_store_enabled", True)
             self.context_window_size = state_data.get("context_window_size", 10)
             self.temperature_modifier = state_data.get("temperature_modifier", 0.0)
             self.performance_metrics = state_data.get("performance_metrics", {})

@@ -10,12 +10,13 @@ from typing import Dict, List, Any, Optional, Union, Callable, Awaitable
 from functools import wraps
 from concurrent.futures import ThreadPoolExecutor
 import json
+from datetime import datetime
 
 from openai import OpenAI, AsyncOpenAI
 from openai.types.chat import ChatCompletion
-from openai.types.embedding import Embedding
+from openai.types.chat.chat_completion import Choice, ChatCompletionMessage
 
-from models.state import ResponseCache, cached
+from src.models.state import ResponseCache, cached
 
 
 # Initialize clients
@@ -24,7 +25,8 @@ async_client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 
 # Setup cache
-response_cache = ResponseCache(cache_dir=".cache/openai")
+response_cache = ResponseCache(".cache/openai")
+response_cache._ensure_cache_dir()
 
 
 @cached(response_cache)
@@ -124,72 +126,93 @@ async def async_chat_completion(
         raise RuntimeError(f"Async OpenAI API error: {str(e)}")
 
 
-def embeddings_create(
-    input: Union[str, List[str]],
-    model: str = "text-embedding-ada-002"
-) -> List[List[float]]:
+def chat_completion_create(
+    messages: List[Dict[str, str]],
+    model: str = "gpt-4-turbo-preview",
+    temperature: float = 0.7,
+    max_tokens: Optional[int] = None,
+    stream: bool = False
+) -> ChatCompletion:
     """
-    Create embeddings for the given input.
+    Create a chat completion using the OpenAI API.
     
     Args:
-        input: String or list of strings to embed
-        model: The embedding model to use
+        messages: List of message dictionaries with role and content
+        model: The model to use
+        temperature: Response variability
+        max_tokens: Maximum tokens in response
+        stream: Whether to stream the response
         
     Returns:
-        List of embedding vectors
+        OpenAI chat completion response
     """
     try:
-        response = client.embeddings.create(
-            model=model,
-            input=input
-        )
-        return [item.embedding for item in response.data]
+        # Build request parameters
+        params = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": stream
+        }
+        if max_tokens:
+            params["max_tokens"] = max_tokens
+            
+        # Make API call
+        response = client.chat.completions.create(**params)
+        return response
+        
     except Exception as e:
-        raise RuntimeError(f"OpenAI Embeddings API error: {str(e)}")
+        raise RuntimeError(f"OpenAI Chat API error: {str(e)}")
 
 
-async def async_embeddings_create(
-    input: Union[str, List[str]],
-    model: str = "text-embedding-ada-002"
-) -> List[List[float]]:
+async def async_chat_completion_create(
+    messages: List[Dict[str, str]],
+    model: str = "gpt-4-turbo-preview",
+    temperature: float = 0.7,
+    max_tokens: Optional[int] = None,
+    stream: bool = False
+) -> ChatCompletion:
     """
-    Create embeddings for the given input asynchronously.
+    Create a chat completion asynchronously using the OpenAI API.
     
     Args:
-        input: String or list of strings to embed
-        model: The embedding model to use
+        messages: List of message dictionaries with role and content
+        model: The model to use
+        temperature: Response variability
+        max_tokens: Maximum tokens in response
+        stream: Whether to stream the response
         
     Returns:
-        List of embedding vectors
+        OpenAI chat completion response
     """
     try:
-        # First check cache
-        if response_cache.enabled:
-            cache_key = response_cache._generate_key({
-                'func': 'async_embeddings_create',
-                'args': (input,),
-                'kwargs': {'model': model}
-            })
+        # Log the request for debugging
+        request_log = {
+            'func': 'async_chat_completion_create',
+            'timestamp': datetime.now().isoformat(),
+            'model': model,
+            'temperature': temperature,
+            'max_tokens': max_tokens,
+            'stream': stream,
+            'message_count': len(messages)
+        }
+        
+        # Build request parameters
+        params = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": stream
+        }
+        if max_tokens:
+            params["max_tokens"] = max_tokens
             
-            cached_result = response_cache.get(cache_key)
-            if cached_result is not None:
-                return cached_result
+        # Make async API call
+        response = await async_client.chat.completions.create(**params)
+        return response
         
-        # Get response asynchronously
-        response = await async_client.embeddings.create(
-            model=model,
-            input=input
-        )
-        
-        result = [item.embedding for item in response.data]
-        
-        # Cache the result if caching is enabled
-        if response_cache.enabled:
-            response_cache.set(cache_key, result)
-            
-        return result
     except Exception as e:
-        raise RuntimeError(f"Async OpenAI Embeddings API error: {str(e)}")
+        raise RuntimeError(f"Async OpenAI Chat API error: {str(e)}")
 
 
 async def batch_async_operations(

@@ -28,12 +28,11 @@ class Message:
             "metadata": {
                 "role": self.role,
                 "timestamp": self.timestamp.isoformat(),
+                "type": "message",
+                "version": "2.0",
                 **self.metadata
             }
         }
-    
-    # Alias for backward compatibility
-    to_vector_store_format = to_retrieval_store_format
     
     def set_metadata(self, key: str, value: Any) -> None:
         """Set metadata for the message."""
@@ -85,7 +84,4 @@ class MessageHistory:
     def to_retrieval_store_format(self) -> List[Dict[str, Any]]:
         """Convert all messages to retrieval store format."""
         return [msg.to_retrieval_store_format() for msg in self.messages 
-                if msg.role != "system"]  # Typically don't store system messages
-    
-    # Alias for backward compatibility
-    to_vector_store_format = to_retrieval_store_format 
+                if msg.role != "system"]  # Typically don't store system messages 

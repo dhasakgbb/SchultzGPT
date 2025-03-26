@@ -10,6 +10,7 @@ from typing import Dict, List, Any, Optional, Union, Callable, Tuple
 import traceback
 
 from dotenv import load_dotenv
+from openai import OpenAI
 
 from models.state import SchultzState
 from models.message import Message, MessageHistory
@@ -33,10 +34,7 @@ class SchultzController:
         self.state = SchultzState()
         
         # Initialize retrieval store
-        self.retrieval_store = RetrievalStore(
-            assistant_id=os.environ.get("OPENAI_ASSISTANT_ID"),
-            embedding_model=os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
-        )
+        self.retrieval_store = RetrievalStore()
         
         # Initialize performance tracker
         self.performance_tracker = PerformanceTracker(
@@ -52,6 +50,12 @@ class SchultzController:
         
         # Initialize UI
         self.ui = TerminalUI()
+        
+        # Initialize OpenAI client
+        self.openai_client = OpenAI(
+            api_key=os.environ.get("OPENAI_API_KEY"),
+            organization=os.environ.get("OPENAI_ORG_ID")
+        )
         
         # Register commands
         self.commands = {
@@ -205,9 +209,9 @@ class SchultzController:
             f"  Context Window: {self.state.context_window_size} messages\n"
             f"  Temperature Modifier: {self.state.temperature_modifier}\n"
             f"  Retrieval Store: {'Connected' if self.message_manager.retrieval_store_available else 'Disconnected'}\n"
-            f"  Assistant ID: {self.retrieval_store.assistant_id}\n"
-            f"  File Count: {len(self.retrieval_store.file_ids)}\n"
+            f"  Assistant ID: {os.environ.get('OPENAI_ASSISTANT_ID', 'Not Set')}\n"
             f"  Model: {Config.FINE_TUNED_MODEL}\n"
+            f"  Retrieval API: {'Enabled' if self.state.retrieval_store_enabled else 'Disabled'}\n"
         )
         return status
     

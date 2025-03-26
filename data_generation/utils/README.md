@@ -1,10 +1,29 @@
-# Jon Data Utilities
+# Data Generation Utilities
 
-This directory contains utility scripts for testing and exploring Jon data:
+This directory contains utility scripts for working with generated data.
 
-## Scripts
+## Test Jon Data
 
-- `test_jon_data.py`: Displays and interactively tests generated Jon data
+The `test_jon_data.py` script helps validate generated data files.
+
+### Usage
+
+```bash
+# Test a Q&A data file
+python -m data_generation.utils.test_jon_data --file path/to/qa_data.jsonl --type qa
+
+# Test a conversation data file
+python -m data_generation.utils.test_jon_data --file path/to/conversation_data.jsonl --type conversation
+
+# Test a statements data file
+python -m data_generation.utils.test_jon_data --file path/to/statements_data.jsonl --type statements
+```
+
+### Options
+
+- `--file`: Path to the data file to test
+- `--type`: Type of data to test (qa, conversation, or statements)
+- `--verbose`: Show detailed test results
 
 ## Usage Examples
 

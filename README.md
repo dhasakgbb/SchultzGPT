@@ -11,6 +11,7 @@ A terminal-based AI persona chatbot with OpenAI Retrieval API-backed memory.
 - Conversation summarization for long-term context
 - Smart context retrieval for more relevant responses
 - Configurable via environment variables
+
 ## Installation
 
 1. Clone the repository:
@@ -94,7 +95,6 @@ SchultzGPT is built with a clean, modular architecture:
   - `generation/` - Data generation scripts
     - `jon_data_generator.py` - Synthetic Jon data generator
   - `loading/` - Data loading utilities
-    - `load_jon_data.py` - Legacy vector store loader
     - `load_jon_retrieval.py` - Retrieval API loader
     - `manage_assistants.py` - OpenAI Assistant management
   - `training/` - Fine-tuning utilities
@@ -104,8 +104,6 @@ SchultzGPT is built with a clean, modular architecture:
     - `test_jon_data.py` - Data testing and exploration
   - `visualization/` - Memory visualization tools
     - `visualize_memory.py` - Jon's memory visualizer
-  - `migration/` - Migration utilities
-    - `migrate_vector_to_retrieval.py` - Vector to retrieval migrator
 - `run.py` - Main entry point
 
 ## Enhanced UI
@@ -138,36 +136,16 @@ SchultzGPT uses OpenAI's Retrieval API to create a persistent semantic memory sy
 When you first run SchultzGPT, it creates an Assistant automatically. The Assistant ID is saved for future sessions.
 You can also specify your own Assistant ID in the `.env` file.
 
-## Migrating from Vector Store to Retrieval API
-
-If you're upgrading from a previous version that used the legacy vector store, you can migrate your existing data to the new OpenAI Retrieval API:
-
-```bash
-# Check what would be migrated without uploading (dry run)
-python -m data_generation.jon_tools migrate --vector-dir vector_store --dry-run
-
-# Migrate data from vector store to retrieval API
-python -m data_generation.jon_tools migrate --vector-dir vector_store
-
-# Specify an existing assistant to add data to
-python -m data_generation.jon_tools migrate --vector-dir vector_store --assistant-id asst_abc123
-```
-
-The migration process preserves all your existing data while converting it to the format required by the OpenAI Retrieval API. This ensures a smooth transition with no loss of Jon's memory.
-
-For more advanced migration options, see the [Jon Data Migration Tools README](data_generation/migration/README.md).
-
 ## SchultzGPT Data Generation
 
 The `data_generation` directory contains a comprehensive toolkit for generating synthetic data to train and enhance Jon's knowledge. It has been reorganized into a more modular structure:
 
 - `jon_tools.py`: A unified CLI interface to all data generation and management functions
 - `generation/`: Scripts for generating Jon data (Q&A pairs, conversations, statements)
-- `loading/`: Tools for loading data into vector store, retrieval API, and managing assistants
+- `loading/`: Tools for loading data into the Retrieval API and managing assistants
 - `training/`: Scripts for preparing data for fine-tuning and managing fine-tuning jobs
 - `utils/`: Utilities for testing and exploring Jon data
 - `visualization/`: Tools for visualizing Jon's memory structure
-- `migration/`: Tools for migrating from legacy vector store to OpenAI Retrieval API
 
 For detailed usage instructions, see the [Jon Data Generation Toolkit README](data_generation/README.md).
 
