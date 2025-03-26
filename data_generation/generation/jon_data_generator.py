@@ -289,10 +289,7 @@ JON_STYLE_ELEMENTS = [
     "refers to serious topics bluntly and directly",
     "abruptly changes topics within messages",
     "tends to use periods sparingly, creating run-on sentences",
-    "uses 'like' as a filler word similar to spoken speech",
-    "sometimes uses the wrong version of a word such as 'knew' or 'new'",
-    
-    
+    "sometimes uses the wrong version of a word such as 'knew' or 'new'"
 ]
 
 JON_FACTS = [
@@ -1153,14 +1150,16 @@ def generate_contextual_variations(
         client = globals()["client"]
     
     variations = []
-    for i in range(num_variations):
+    failed_attempts = 0
+    
+    while len(variations) < num_variations and failed_attempts < max_retries:
         try:
             # Generate variation
             variation = generate_qa_pair(
                 topic=base_qa["metadata"]["topics"][0],  # Use first topic
                 style=style,
                 use_real_data=use_real_data,
-                max_retries=max_retries,
+                max_retries=2,  # Use fewer retries for variations
                 temperature=temperature,
                 max_tokens=max_tokens,
                 client=client
@@ -1168,26 +1167,20 @@ def generate_contextual_variations(
             
             # Add variation metadata
             variation["metadata"]["variation_of"] = base_qa["question"]
-            variation["metadata"]["variation_index"] = i
+            variation["metadata"]["variation_index"] = len(variations)
             variation["metadata"]["version"] = "2.0"
             variation["metadata"]["generator"] = "jon_data_generator"
             
             variations.append(variation)
+            failed_attempts = 0  # Reset on success
             
         except Exception as e:
-            print(f"Error generating variation {i}: {e}")
-            if max_retries > 0:
-                return generate_contextual_variations(
-                    base_qa=base_qa,
-                    num_variations=num_variations,
-                    style=style,
-                    use_real_data=use_real_data,
-                    max_retries=max_retries - 1,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    client=client
-                )
-            raise
+            print(f"Error generating variation {len(variations)}: {e}")
+            failed_attempts += 1
+            if failed_attempts >= max_retries:
+                print(f"Failed to generate variations after {max_retries} attempts")
+                break
+            time.sleep(2 ** failed_attempts)  # Exponential backoff
     
     return variations
 
@@ -1532,81 +1525,6 @@ Important:
 7. Ensure all required fields are present in the JSON structure"""
     
     return prompt
-
-def generate_one_shot_bulk(qa_count, conv_count, stmt_count, batch_num=0, use_real_data=True):
-    """Generate data using one-shot bulk generation method
-    
-    This function is used as a fallback when the Batch API is not available.
-    It sends a single prompt requesting multiple items to be generated at once.
-    
-    Args:
-        qa_count: Number of QA pairs to generate
-        conv_count: Number of conversations to generate  
-        stmt_count: Number of statements to generate
-        batch_num: Batch number for tracking
-        use_real_data: Whether to include real Jon examples in the prompt
-        
-    Returns:
-        Dictionary containing the generated data
-    """
-    track_api_call("one_shot_bulk_gen_start")
-    
-    # Create the prompt
-    prompt = create_batch_prompt(
-        qa_count=qa_count,
-        conv_count=conv_count,
-        stmt_count=stmt_count,
-        use_real_data=use_real_data
-    )
-    
-    # Make the API call
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4-turbo-preview",
-            messages=[{"role": "system", "content": prompt}],
-            response_format={"type": "json_object"},
-            temperature=0.85,
-            max_tokens=4000
-        )
-        
-        # Process the response
-        result_text = response.choices[0].message.content
-        result_json = json.loads(result_text)
-        
-        # Extract and validate data
-        qa_data = result_json.get("qa_pairs", [])
-        statement_data = result_json.get("statements", [])
-        conversation_data = result_json.get("conversations", [])
-        
-        # Add metadata
-        qa_data = add_batch_metadata(qa_data, "qa", batch_num, "one_shot_bulk")
-        statement_data = add_batch_metadata(statement_data, "statement", batch_num, "one_shot_bulk")
-        conversation_data = add_batch_metadata(conversation_data, "conversation", batch_num, "one_shot_bulk")
-        
-        # Track API usage
-        prompt_tokens = response.usage.prompt_tokens if hasattr(response, 'usage') else 0
-        completion_tokens = response.usage.completion_tokens if hasattr(response, 'usage') else 0
-        total_tokens = prompt_tokens + completion_tokens
-        
-        track_api_call("one_shot_bulk_gen", total_tokens, 
-                       batch_size=qa_count + conv_count + stmt_count)
-        
-        print(f"Generated {len(qa_data)} QA pairs, {len(conversation_data)} conversations, and {len(statement_data)} statements")
-        
-        return {
-            "qa_data": qa_data,
-            "statement_data": statement_data,
-            "conversation_data": conversation_data
-        }
-        
-    except Exception as e:
-        print(f"Error in one-shot bulk generation: {e}")
-        # Return empty data as a fallback
-        return {
-            "qa_data": [],
-            "statement_data": [],
-            "conversation_data": []
-        }
 
 def generate_with_batch_api(qa_pairs, conversations, statements, batch_size=15, max_concurrent=8, use_real_data=True):
     """Generate Jon data using OpenAI's API with batching for efficiency"""
@@ -2001,35 +1919,57 @@ def save_data(
                 if project_root not in sys.path:
                     sys.path.insert(0, project_root)
                 
-                from data_generation.utils.test_jon_data import (
-                    test_qa_data,
-                    test_conversation_data,
-                    test_statement_data,
-                    test_retrieval_data
-                )
+                # Try to import test functions, but don't fail if they don't exist
+                test_functions = {}
+                try:
+                    from data_generation.utils.test_jon_data import (
+                        test_qa_data,
+                        test_conversation_data,
+                        test_statement_data,
+                        test_retrieval_data
+                    )
+                    test_functions = {
+                        "qa": test_qa_data,
+                        "conversation": test_conversation_data,
+                        "statement": test_statement_data,
+                        "retrieval": test_retrieval_data
+                    }
+                except ImportError as e:
+                    print(f"Warning: Could not import test functions: {e}")
+                    print("Skipping data verification.")
+                    return {
+                        "raw_file": raw_file,
+                        "retrieval_file": retrieval_file,
+                        "fine_tuning_file": fine_tuning_file
+                    }
                 
                 print("\nVerifying generated data...")
                 verification_errors = []
                 
-                try:
-                    test_qa_data(qa_data)
-                except Exception as e:
-                    verification_errors.append(f"QA data verification failed: {e}")
+                # Run tests if available
+                if "qa" in test_functions:
+                    try:
+                        test_functions["qa"](qa_data)
+                    except Exception as e:
+                        verification_errors.append(f"QA data verification failed: {e}")
                 
-                try:
-                    test_conversation_data(conversation_data)
-                except Exception as e:
-                    verification_errors.append(f"Conversation data verification failed: {e}")
+                if "conversation" in test_functions:
+                    try:
+                        test_functions["conversation"](conversation_data)
+                    except Exception as e:
+                        verification_errors.append(f"Conversation data verification failed: {e}")
                 
-                try:
-                    test_statement_data(statement_data)
-                except Exception as e:
-                    verification_errors.append(f"Statement data verification failed: {e}")
+                if "statement" in test_functions:
+                    try:
+                        test_functions["statement"](statement_data)
+                    except Exception as e:
+                        verification_errors.append(f"Statement data verification failed: {e}")
                 
-                try:
-                    test_retrieval_data(retrieval_file)
-                except Exception as e:
-                    verification_errors.append(f"Retrieval data verification failed: {e}")
+                if "retrieval" in test_functions:
+                    try:
+                        test_functions["retrieval"](retrieval_file)
+                    except Exception as e:
+                        verification_errors.append(f"Retrieval data verification failed: {e}")
                 
                 if verification_errors:
                     print("\nVerification Warnings:")
@@ -2039,9 +1979,6 @@ def save_data(
                 else:
                     print("\nAll data verification checks passed successfully.")
                 
-            except ImportError as e:
-                print(f"Warning: Could not import test functions: {e}")
-                print("Skipping data verification.")
             except Exception as e:
                 print(f"Warning: Error during data verification: {e}")
                 print("Skipping data verification.")
