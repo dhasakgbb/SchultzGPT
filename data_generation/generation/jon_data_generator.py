@@ -55,7 +55,7 @@ try:
 except ImportError:
     # Add parent project directories to path
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
-    from src.config.config import Config
+from src.config.config import Config
 from tabulate import tabulate
 
 # Load environment variables
@@ -463,14 +463,14 @@ def analyze_data_quality(data_items, item_type="qa"):
                 metrics["error_count"] += 1
                 metrics["validation_errors"].append(f"Invalid item type: {type(item)}")
                 continue
-                
+            
             # Extract text based on item type
             text = extract_text(item, item_type)
             if not text:
                 metrics["error_count"] += 1
                 metrics["validation_errors"].append(f"Missing text in {item_type} item")
                 continue
-                
+            
             # Token count
             token_count = get_token_estimate(text)
             metrics["token_counts"].append(token_count)
@@ -650,6 +650,373 @@ def enrich_metadata(item, item_type, metrics=None):
     
     return enriched
 
+def extract_entities(text: str) -> List[str]:
+    """Extract relevant entities from text that match Jon's known entities.
+    
+    Args:
+        text: Text to extract entities from
+        
+    Returns:
+        List of found entities
+    """
+    found_entities = []
+    text_lower = text.lower()
+    
+    # Check each entity category
+    for category, entities in ENTITIES.items():
+        for entity in entities:
+            if entity.lower() in text_lower:
+                found_entities.append(entity)
+    
+    return list(set(found_entities))  # Remove duplicates
+
+def extract_topics(text: str) -> List[str]:
+    """Extract relevant topics from text that match Jon's known topics.
+    
+    Args:
+        text: Text to extract topics from
+        
+    Returns:
+        List of found topics
+    """
+    found_topics = []
+    text_lower = text.lower()
+    
+    # Check each topic
+    for topic in TOPICS:
+        if topic.lower() in text_lower:
+            found_topics.append(topic)
+    
+    # Check topic clusters
+    for cluster, topics in TOPIC_CLUSTERS.items():
+        for topic in topics:
+            if topic.lower() in text_lower:
+                found_topics.append(topic)
+    
+    return list(set(found_topics))  # Remove duplicates
+
+def build_prompt(topic: Optional[str] = None, style: str = "casual", use_real_data: bool = True) -> str:
+    """Build a prompt for generating Q&A pairs.
+    
+    Args:
+        topic: Optional topic to focus on
+        style: Response style (default: casual)
+        use_real_data: Whether to use real data examples
+        
+    Returns:
+        Formatted prompt string
+    """
+    # Get real Jon examples if enabled
+    real_examples = ""
+    if use_real_data and JON_REAL_MESSAGES:
+        real_examples = "\nReal Jon examples:\n" + "\n".join(random.sample(JON_REAL_MESSAGES, min(3, len(JON_REAL_MESSAGES))))
+    
+    # Build topic-specific prompt
+    topic_prompt = ""
+    if topic:
+        topic_prompt = f"Focus on the topic: {topic}\n"
+    
+    # Get random style elements
+    style_elements = random.sample(JON_STYLE_ELEMENTS, min(4, len(JON_STYLE_ELEMENTS)))
+    
+    # Get random facts about Jon
+    jon_facts = random.sample(JON_FACTS, min(3, len(JON_FACTS)))
+    
+    prompt = f"""You are Jon. Generate a Q&A pair that reflects Jon's authentic voice and personality.
+
+{Config.PERSONA}
+
+{topic_prompt}
+
+Style elements to incorporate:
+{' '.join([f"- {element}" for element in style_elements])}
+
+Relevant facts about Jon:
+{' '.join([f"- {fact}" for fact in jon_facts])}
+
+{real_examples}
+
+Generate a Q&A pair in this format:
+Q: [user's question]
+A: [Jon's response]
+
+The response should be in Jon's authentic voice and style."""
+
+    return prompt
+
+def generate_conversation(
+    topic: Optional[str] = None,
+    style: str = "casual",
+    use_real_data: bool = True,
+    max_retries: int = 3,
+    temperature: float = 0.7,
+    max_tokens: int = 1000,
+    client: Optional[OpenAI] = None
+) -> Dict[str, Any]:
+    """Generate a single conversation with metadata."""
+    # Use global client if none provided
+    if client is None:
+        client = globals()["client"]
+    
+    # Build prompt with real data examples if enabled
+    real_examples = ""
+    if use_real_data and JON_REAL_MESSAGES:
+        real_examples = "\nReal Jon examples:\n" + "\n".join(random.sample(JON_REAL_MESSAGES, min(3, len(JON_REAL_MESSAGES))))
+    
+    # Build topic-specific prompt
+    topic_prompt = ""
+    if topic:
+        topic_prompt = f"Focus on the topic: {topic}\n"
+    
+    # Get random style elements
+    style_elements = random.sample(JON_STYLE_ELEMENTS, min(4, len(JON_STYLE_ELEMENTS)))
+    
+    # Get random facts about Jon
+    jon_facts = random.sample(JON_FACTS, min(3, len(JON_FACTS)))
+    
+    prompt = f"""You are Jon. Generate a conversation that reflects Jon's authentic voice and personality.
+
+{Config.PERSONA}
+
+{topic_prompt}
+
+Style elements to incorporate:
+{' '.join([f"- {element}" for element in style_elements])}
+
+Relevant facts about Jon:
+{' '.join([f"- {fact}" for fact in jon_facts])}
+
+{real_examples}
+
+Generate a conversation with 3-4 exchanges in this format:
+User: [user's message]
+Jon: [Jon's response]
+User: [user's follow-up]
+Jon: [Jon's response]
+...
+
+The responses should be in Jon's authentic voice and style."""
+
+    # Track API usage
+    track_api_call("conversation_gen_start")
+    
+    for attempt in range(max_retries + 1):
+        try:
+            # Generate response with exponential backoff
+            if attempt > 0:
+                backoff_time = min(2 ** attempt, 30)  # Cap at 30 seconds
+                print(f"Retry attempt {attempt}/{max_retries}, waiting {backoff_time} seconds...")
+                time.sleep(backoff_time)
+            
+            response = client.chat.completions.create(
+                model="gpt-4-turbo-preview",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+                max_tokens=max_tokens
+            )
+            
+            # Track successful API call
+            track_api_call("conversation_gen", response.usage.total_tokens)
+            
+            # Parse response
+            content = response.choices[0].message.content
+            
+            # Extract messages
+            messages = []
+            user_pattern = r"User:\s*(.*?)(?=\nJon:|$)"
+            jon_pattern = r"Jon:\s*(.*?)(?=\nUser:|$)"
+            
+            user_matches = re.finditer(user_pattern, content, re.DOTALL | re.IGNORECASE)
+            jon_matches = re.finditer(jon_pattern, content, re.DOTALL | re.IGNORECASE)
+            
+            for user_match, jon_match in zip(user_matches, jon_matches):
+                messages.append({"role": "user", "content": user_match.group(1).strip()})
+                messages.append({"role": "assistant", "content": jon_match.group(1).strip()})
+            
+            if not messages:
+                raise ValueError("Could not extract conversation from response")
+            
+            # Validate response quality
+            if len(messages) < 2:
+                raise ValueError("Conversation too short")
+            
+            if len(messages) > 8:  # Cap at 4 exchanges
+                messages = messages[:8]
+            
+            # Extract entities and topics
+            all_text = " ".join(m["content"] for m in messages)
+            entities = extract_entities(all_text)
+            topics = extract_topics(all_text)
+            
+            # Generate metadata
+            metadata = {
+                "timestamp": datetime.now().isoformat(),
+                "model": "gpt-4-turbo-preview",
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "style": style,
+                "entities": entities,
+                "topics": topics,
+                "version": "2.0",
+                "generator": "jon_data_generator",
+                "attempt": attempt + 1
+            }
+            
+            return {
+                "messages": messages,
+                "metadata": metadata
+            }
+            
+        except Exception as e:
+            error_msg = str(e).lower()
+            
+            # Check for authentication errors
+            if "401" in error_msg or "unauthorized" in error_msg or "invalid api key" in error_msg:
+                print("Authentication error detected. Please check your API key.")
+                raise
+            
+            # Check for rate limit errors
+            if "429" in error_msg or "rate limit" in error_msg:
+                if attempt < max_retries:
+                    backoff_time = min(2 ** (attempt + 1), 60)  # Cap at 60 seconds for rate limits
+                    print(f"Rate limit hit. Waiting {backoff_time} seconds before retry...")
+                    time.sleep(backoff_time)
+                    continue
+                else:
+                    raise Exception("Rate limit exceeded after all retries")
+            
+            print(f"Error generating conversation (attempt {attempt + 1}/{max_retries + 1}): {e}")
+            if attempt == max_retries:
+                raise
+            continue
+    
+    raise Exception(f"Failed to generate conversation after {max_retries + 1} attempts")
+
+def generate_statement(
+    topic: Optional[str] = None,
+    style: str = "casual",
+    use_real_data: bool = True,
+    max_retries: int = 3,
+    temperature: float = 0.7,
+    max_tokens: int = 1000,
+    client: Optional[OpenAI] = None
+) -> Dict[str, Any]:
+    """Generate a single statement with metadata."""
+    # Use global client if none provided
+    if client is None:
+        client = globals()["client"]
+    
+    # Build prompt with real data examples if enabled
+    real_examples = ""
+    if use_real_data and JON_REAL_MESSAGES:
+        real_examples = "\nReal Jon examples:\n" + "\n".join(random.sample(JON_REAL_MESSAGES, min(3, len(JON_REAL_MESSAGES))))
+    
+    # Build topic-specific prompt
+    topic_prompt = ""
+    if topic:
+        topic_prompt = f"Focus on the topic: {topic}\n"
+    
+    # Get random style elements
+    style_elements = random.sample(JON_STYLE_ELEMENTS, min(4, len(JON_STYLE_ELEMENTS)))
+    
+    # Get random facts about Jon
+    jon_facts = random.sample(JON_FACTS, min(3, len(JON_FACTS)))
+    
+    prompt = f"""You are Jon. Generate a statement that reflects Jon's authentic voice and personality.
+
+{Config.PERSONA}
+
+{topic_prompt}
+
+Style elements to incorporate:
+{' '.join([f"- {element}" for element in style_elements])}
+
+Relevant facts about Jon:
+{' '.join([f"- {fact}" for fact in jon_facts])}
+
+{real_examples}
+
+Generate a statement in Jon's authentic voice and style."""
+
+    # Track API usage
+    track_api_call("statement_gen_start")
+    
+    for attempt in range(max_retries + 1):
+        try:
+            # Generate response with exponential backoff
+            if attempt > 0:
+                backoff_time = min(2 ** attempt, 30)  # Cap at 30 seconds
+                print(f"Retry attempt {attempt}/{max_retries}, waiting {backoff_time} seconds...")
+                time.sleep(backoff_time)
+            
+            response = client.chat.completions.create(
+                model="gpt-4-turbo-preview",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+                max_tokens=max_tokens
+            )
+            
+            # Track successful API call
+            track_api_call("statement_gen", response.usage.total_tokens)
+            
+            # Parse response
+            content = response.choices[0].message.content.strip()
+            
+            # Validate response quality
+            if len(content) < 20:
+                raise ValueError("Statement too short")
+            
+            if len(content) > max_tokens * 4:  # Rough estimate
+                raise ValueError("Statement too long")
+            
+            # Extract entities and topics
+            entities = extract_entities(content)
+            topics = extract_topics(content)
+            
+            # Generate metadata
+            metadata = {
+                "timestamp": datetime.now().isoformat(),
+                "model": "gpt-4-turbo-preview",
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "style": style,
+                "entities": entities,
+                "topics": topics,
+                "version": "2.0",
+                "generator": "jon_data_generator",
+                "attempt": attempt + 1
+            }
+            
+            return {
+                "statement": content,
+                "metadata": metadata
+            }
+            
+        except Exception as e:
+            error_msg = str(e).lower()
+            
+            # Check for authentication errors
+            if "401" in error_msg or "unauthorized" in error_msg or "invalid api key" in error_msg:
+                print("Authentication error detected. Please check your API key.")
+                raise
+            
+            # Check for rate limit errors
+            if "429" in error_msg or "rate limit" in error_msg:
+                if attempt < max_retries:
+                    backoff_time = min(2 ** (attempt + 1), 60)  # Cap at 60 seconds for rate limits
+                    print(f"Rate limit hit. Waiting {backoff_time} seconds before retry...")
+                    time.sleep(backoff_time)
+                    continue
+                else:
+                    raise Exception("Rate limit exceeded after all retries")
+            
+            print(f"Error generating statement (attempt {attempt + 1}/{max_retries + 1}): {e}")
+            if attempt == max_retries:
+                raise
+            continue
+    
+    raise Exception(f"Failed to generate statement after {max_retries + 1} attempts")
+
 def generate_qa_pair(
     topic: Optional[str] = None,
     style: str = "casual",
@@ -659,20 +1026,7 @@ def generate_qa_pair(
     max_tokens: int = 1000,
     client: Optional[OpenAI] = None
 ) -> Dict[str, Any]:
-    """Generate a single Q&A pair with metadata.
-    
-    Args:
-        topic: Optional topic to focus on
-        style: Response style (default: casual)
-        use_real_data: Whether to use real data examples
-        max_retries: Maximum number of retries
-        temperature: Response variability
-        max_tokens: Maximum tokens in response
-        client: Optional OpenAI client
-        
-    Returns:
-        Dictionary containing the Q&A pair and metadata
-    """
+    """Generate a single Q&A pair with metadata."""
     # Use global client if none provided
     if client is None:
         client = globals()["client"]
@@ -710,7 +1064,7 @@ def generate_qa_pair(
             
             if not question_match or not answer_match:
                 raise ValueError("Could not extract Q&A from response")
-                
+            
             question = question_match.group(1).strip()
             answer = answer_match.group(1).strip()
             
@@ -746,6 +1100,23 @@ def generate_qa_pair(
             }
             
         except Exception as e:
+            error_msg = str(e).lower()
+            
+            # Check for authentication errors
+            if "401" in error_msg or "unauthorized" in error_msg or "invalid api key" in error_msg:
+                print("Authentication error detected. Please check your API key.")
+                raise
+            
+            # Check for rate limit errors
+            if "429" in error_msg or "rate limit" in error_msg:
+                if attempt < max_retries:
+                    backoff_time = min(2 ** (attempt + 1), 60)  # Cap at 60 seconds for rate limits
+                    print(f"Rate limit hit. Waiting {backoff_time} seconds before retry...")
+                    time.sleep(backoff_time)
+                    continue
+                else:
+                    raise Exception("Rate limit exceeded after all retries")
+            
             print(f"Error generating Q&A pair (attempt {attempt + 1}/{max_retries + 1}): {e}")
             if attempt == max_retries:
                 raise
@@ -779,7 +1150,7 @@ def generate_contextual_variations(
         List of Q&A pairs with variations
     """
     if client is None:
-        client = OpenAI()
+        client = globals()["client"]
     
     variations = []
     for i in range(num_variations):
@@ -828,80 +1199,58 @@ def generate_bulk_conversations(count: int, turns_per_conversation: int = 6) -> 
         count: Number of conversations to generate
         turns_per_conversation: Number of message exchanges per conversation
     """
-    # Select random topics from different clusters for variety
-    topics = []
-    clusters = list(TOPIC_CLUSTERS.keys())
-    for _ in range(count):
-        cluster = random.choice(clusters)
-        topic = random.choice(TOPIC_CLUSTERS[cluster])
-        topics.append(topic)
+    conversations = []
+    failed_attempts = 0
+    max_failed_attempts = 3
+    consecutive_failures = 0
+    max_consecutive_failures = 3
     
-    # Style elements and moods
-    style_elements = random.sample(JON_STYLE_ELEMENTS, min(4, len(JON_STYLE_ELEMENTS)))
-    mood_options = random.sample(MOODS, min(5, len(MOODS)))
+    # Create progress bar
+    pbar = tqdm(total=count, desc="Generating conversations")
     
-    prompt = f"""
-    Generate {count} complete conversations between User and Jon.
-    
-    Jon's persona:
-    {Config.PERSONA}
-    
-    Each conversation should:
-    1. Have approximately {turns_per_conversation} total messages (alternating between User and Jon)
-    2. Begin with a user message and end with a Jon message
-    3. Have a natural flow and tone
-    
-    Topics to use (one per conversation):
-    {', '.join(topics)}
-    
-    Jon's style elements to incorporate:
-    {' '.join([f"- {element}" for element in style_elements])}
-    
-    Potential moods for Jon:
-    {', '.join(mood_options)}
-    
-    Format your response as a JSON array of conversation objects.
-    Each conversation object should contain:
-    - "topic": The conversation topic
-    - "messages": Array of message objects, each with:
-      - "role": Either "user" or "assistant" (for Jon)
-      - "content": The message content
-      - "mood": Jon's mood (only for assistant messages)
-    
-    Your response should be ONLY a valid JSON array without explanation.
-    """
-    
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4-turbo-preview",
-            messages=[{"role": "system", "content": prompt}],
-            response_format={"type": "json_object"},
-            temperature=0.85,
-            max_tokens=4000  # Increased token limit for multiple conversations
-        )
-        
-        result_text = response.choices[0].message.content
-        result_json = json.loads(result_text)
-        
-        # Check if result is already an array or if it's wrapped in an object
-        if isinstance(result_json, dict) and "conversations" in result_json:
-            conversations = result_json["conversations"]
-        elif isinstance(result_json, list):
-            conversations = result_json
-        else:
-            # Try to find an array in the response
-            for key in result_json:
-                if isinstance(result_json[key], list):
-                    conversations = result_json[key]
-                    break
+    while len(conversations) < count:
+        try:
+            # Add exponential backoff for rate limiting
+            if consecutive_failures > 0:
+                backoff_time = min(2 ** consecutive_failures, 30)  # Cap at 30 seconds
+                pbar.set_description(f"Rate limit backoff: waiting {backoff_time}s...")
+                time.sleep(backoff_time)
+            
+            # Generate a single conversation
+            conversation = generate_conversation(
+                max_retries=2,
+                temperature=0.7,
+                max_tokens=1000
+            )
+            
+            if conversation and "messages" in conversation and len(conversation["messages"]) >= 2:
+                conversations.append(conversation)
+                consecutive_failures = 0  # Reset on success
+                pbar.update(1)
+                pbar.set_description(f"Generated {len(conversations)}/{count} conversations")
             else:
-                raise ValueError("Could not find conversations array in response")
-        
-        return conversations
-    except Exception as e:
-        print(f"Error generating bulk conversations: {e}")
-        # Return empty conversations to avoid breaking the loop
-        return [{"topic": "", "messages": [], "error": str(e)} for _ in range(count)]
+                raise ValueError("Invalid conversation format")
+                
+        except Exception as e:
+            print(f"\nError generating conversation: {e}")
+            failed_attempts += 1
+            consecutive_failures += 1
+            
+            if failed_attempts >= max_failed_attempts or consecutive_failures >= max_consecutive_failures:
+                print(f"\nStopping after {failed_attempts} failed attempts and {consecutive_failures} consecutive failures")
+                break
+            
+            continue
+    
+    # Close progress bar
+    pbar.close()
+    
+    print(f"\nConversation Generation Complete:")
+    print(f"Successfully generated: {len(conversations)}/{count} conversations")
+    print(f"Failed attempts: {failed_attempts}")
+    print(f"Consecutive failures: {consecutive_failures}")
+    
+    return conversations
 
 def generate_bulk_statements(count: int, topic: str = None) -> List[Dict[str, Any]]:
     """
@@ -911,84 +1260,59 @@ def generate_bulk_statements(count: int, topic: str = None) -> List[Dict[str, An
         count: Number of statements to generate
         topic: Optional topic to focus on
     """
-    # Select topic if not provided
-    if not topic:
-        cluster = random.choice(list(TOPIC_CLUSTERS.keys()))
-        topic = random.choice(TOPIC_CLUSTERS[cluster])
+    statements = []
+    failed_attempts = 0
+    max_failed_attempts = 3
+    consecutive_failures = 0
+    max_consecutive_failures = 3
     
-    # For topic clustering
-    topic_cluster = None
-    for cluster, topics in TOPIC_CLUSTERS.items():
-        if topic in topics:
-            topic_cluster = cluster
-            break
+    # Create progress bar
+    pbar = tqdm(total=count, desc="Generating statements")
     
-    # Style elements to include
-    style_elements = random.sample(JON_STYLE_ELEMENTS, min(4, len(JON_STYLE_ELEMENTS)))
-    
-    prompt = f"""
-    Generate {count} standalone statements from Jon on the topic of {topic}.
-    
-    Jon's persona:
-    {Config.PERSONA}
-    
-    Jon's style elements to incorporate:
-    {' '.join([f"- {element}" for element in style_elements])}
-    
-    Each statement should:
-    1. Be in Jon's authentic voice
-    2. Express an opinion, insight, or perspective
-    3. Be between 1-3 sentences long
-    4. Vary in tone and mood
-    
-    Format your response as a JSON array of statement objects, each with:
-    - "statement": The text of Jon's statement
-    - "topic": The specific aspect of {topic} addressed
-    - "mood": Jon's mood (e.g., {', '.join(random.sample(MOODS, 3))})
-    - "sentiment": Emotional tone (positive, negative, neutral, mixed)
-    
-    Your response should be ONLY a valid JSON array without explanation.
-    """
-    
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4-turbo-preview",
-            messages=[{"role": "system", "content": prompt}],
-            response_format={"type": "json_object"},
-            temperature=0.85
-        )
-        
-        result_text = response.choices[0].message.content
-        result_json = json.loads(result_text)
-        
-        # Check if result is already an array or if it's wrapped in an object
-        if isinstance(result_json, dict) and "statements" in result_json:
-            statements = result_json["statements"]
-        elif isinstance(result_json, list):
-            statements = result_json
-        else:
-            # Try to find an array in the response
-            for key in result_json:
-                if isinstance(result_json[key], list):
-                    statements = result_json[key]
-                    break
+    while len(statements) < count:
+        try:
+            # Add exponential backoff for rate limiting
+            if consecutive_failures > 0:
+                backoff_time = min(2 ** consecutive_failures, 30)  # Cap at 30 seconds
+                pbar.set_description(f"Rate limit backoff: waiting {backoff_time}s...")
+                time.sleep(backoff_time)
+            
+            # Generate a single statement
+            statement = generate_statement(
+                topic=topic,
+                max_retries=2,
+                temperature=0.7,
+                max_tokens=1000
+            )
+            
+            if statement and "statement" in statement and len(statement["statement"]) >= 20:
+                statements.append(statement)
+                consecutive_failures = 0  # Reset on success
+                pbar.update(1)
+                pbar.set_description(f"Generated {len(statements)}/{count} statements")
             else:
-                raise ValueError("Could not find statements array in response")
-        
-        # Add metadata to each statement
-        for statement in statements:
-            statement["metadata"] = {
-                "topic": statement.get("topic", topic),
-                "topic_cluster": topic_cluster,
-                "mood": statement.get("mood", "neutral"),
-                "sentiment": statement.get("sentiment", "neutral"),
-                "token_estimate": get_token_estimate(statement["statement"])
-            }
-        
-        return statements
-    except Exception as e:
-        print(f"Error generating bulk statements: {e}")
-        return [{"statement": "", "error": str(e), "metadata": {}} for _ in range(count)]
+                raise ValueError("Invalid statement format")
+                
+        except Exception as e:
+            print(f"\nError generating statement: {e}")
+            failed_attempts += 1
+            consecutive_failures += 1
+            
+            if failed_attempts >= max_failed_attempts or consecutive_failures >= max_consecutive_failures:
+                print(f"\nStopping after {failed_attempts} failed attempts and {consecutive_failures} consecutive failures")
+                break
+            
+            continue
+    
+    # Close progress bar
+    pbar.close()
+    
+    print(f"\nStatement Generation Complete:")
+    print(f"Successfully generated: {len(statements)}/{count} statements")
+    print(f"Failed attempts: {failed_attempts}")
+    print(f"Consecutive failures: {consecutive_failures}")
+    
+    return statements
 
 def generate_parallel(func, count, batch_size, **kwargs):
     """
@@ -1307,62 +1631,259 @@ def generate_with_batch_api(qa_pairs, conversations, statements, batch_size=15, 
     conversation_data = []
     statement_data = []
     
-    # Track failed attempts
-    failed_attempts = {
-        "qa": 0,
-        "conversations": 0,
-        "statements": 0
-    }
-    max_failed_attempts = 3
+    # Track consecutive errors for backoff
+    consecutive_errors = 0
+    max_consecutive_errors = 3
     
-    # Generate data sequentially
-    try:
-        # Generate QA pairs
-        if qa_pairs > 0 and failed_attempts["qa"] < max_failed_attempts:
-            print(f"\nGenerating {qa_pairs} Q&A pairs...")
-            qa_data = generate_bulk_qa_pairs(qa_pairs, batch_size=qa_per_batch)
-            if not qa_data:
-                print("Warning: No QA pairs were generated")
-                failed_attempts["qa"] += 1
-            else:
-                failed_attempts["qa"] = 0
+    def handle_api_error(e, batch_type, batch_num):
+        nonlocal consecutive_errors
+        error_msg = str(e).lower()
         
-        # Generate conversations
-        if conversations > 0 and failed_attempts["conversations"] < max_failed_attempts:
-            print(f"\nGenerating {conversations} conversations...")
-            try:
-                conversation_data = generate_bulk_conversations(conversations)
-                if not conversation_data:
-                    print("Warning: No conversations were generated")
-                    failed_attempts["conversations"] += 1
-                else:
-                    failed_attempts["conversations"] = 0
-            except Exception as e:
-                print(f"Error generating conversations: {e}")
-                failed_attempts["conversations"] += 1
-                conversation_data = []
+        # Check for authentication errors
+        if "401" in error_msg or "unauthorized" in error_msg or "invalid api key" in error_msg:
+            print(f"Authentication error in {batch_type} batch {batch_num}. Please check your API key.")
+            raise
         
-        # Generate statements
-        if statements > 0 and failed_attempts["statements"] < max_failed_attempts:
-            print(f"\nGenerating {statements} statements...")
-            try:
-                statement_data = generate_bulk_statements(statements)
-                if not statement_data:
-                    print("Warning: No statements were generated")
-                    failed_attempts["statements"] += 1
-                else:
-                    failed_attempts["statements"] = 0
-            except Exception as e:
-                print(f"Error generating statements: {e}")
-                failed_attempts["statements"] += 1
-                statement_data = []
+        # Check for rate limit errors
+        if "429" in error_msg or "rate limit" in error_msg:
+            consecutive_errors += 1
+            if consecutive_errors >= max_consecutive_errors:
+                print(f"Too many consecutive rate limit errors in {batch_type} generation. Stopping.")
+                return True
+            
+            backoff_time = min(2 ** consecutive_errors, 60)  # Cap at 60 seconds
+            print(f"Rate limit hit in {batch_type} batch {batch_num}. Waiting {backoff_time} seconds...")
+            time.sleep(backoff_time)
+            return False
         
-    except Exception as e:
-        print(f"Error during generation: {e}")
-        # Return whatever data we managed to generate
-        return qa_data, conversation_data, statement_data
+        # Check for quota errors
+        if "quota" in error_msg or "insufficient" in error_msg:
+            print(f"Quota exceeded in {batch_type} batch {batch_num}. Please check your API quota.")
+            raise
+        
+        # Handle other errors
+        consecutive_errors += 1
+        if consecutive_errors >= max_consecutive_errors:
+            print(f"Too many consecutive errors in {batch_type} generation. Stopping.")
+            return True
+        
+        print(f"Error in {batch_type} batch {batch_num}: {e}")
+        time.sleep(2 ** consecutive_errors)  # Exponential backoff
+        return False
     
-    # Print final status
+    # Generate QA pairs in batches
+    if qa_pairs > 0:
+        print(f"\nGenerating {qa_pairs} Q&A pairs...")
+        for batch_start in range(0, qa_pairs, qa_per_batch):
+            batch_size = min(qa_per_batch, qa_pairs - batch_start)
+            batch_num = batch_start // qa_per_batch + 1
+            
+            # Create batch prompt
+            topics = [random.choice(TOPICS) for _ in range(batch_size)]
+            style_elements = random.sample(JON_STYLE_ELEMENTS, min(4, len(JON_STYLE_ELEMENTS)))
+            
+            prompt = f"""Generate {batch_size} Q&A pairs about the following topics: {', '.join(topics)}
+
+Jon's persona:
+{Config.PERSONA}
+
+Style elements to incorporate:
+{' '.join([f"- {element}" for element in style_elements])}
+
+Format your response as a JSON array of objects, each with:
+- "question": The user's question
+- "answer": Jon's response
+- "topic": The topic addressed
+
+Each answer should be in Jon's authentic voice and style.
+Your response should be ONLY a valid JSON array."""
+
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-4-turbo-preview",
+                    messages=[{"role": "system", "content": prompt}],
+                    response_format={"type": "json_object"},
+                    temperature=0.7,
+                    max_tokens=2000
+                )
+                
+                try:
+                    result = json.loads(response.choices[0].message.content)
+                    batch_qa = result if isinstance(result, list) else result.get("qa_pairs", [])
+                except json.JSONDecodeError as e:
+                    print(f"Error parsing JSON response in QA batch {batch_num}: {e}")
+                    consecutive_errors += 1
+                    if consecutive_errors >= max_consecutive_errors:
+                        print("Too many JSON parsing errors. Stopping.")
+                        break
+                    time.sleep(2 ** consecutive_errors)
+                    continue
+                
+                # Process and validate each QA pair
+                for qa in batch_qa:
+                    if isinstance(qa, dict) and "question" in qa and "answer" in qa:
+                        # Add metadata
+                        qa["metadata"] = {
+                            "topic": qa.get("topic", ""),
+                            "entities": extract_entities(qa["answer"]),
+                            "topics": extract_topics(qa["answer"]),
+                            "timestamp": datetime.now().isoformat(),
+                            "model": "gpt-4-turbo-preview",
+                            "version": "2.0",
+                            "generator": "jon_data_generator"
+                        }
+                        qa_data.append(qa)
+                
+                track_api_call("qa_batch_gen", response.usage.total_tokens, batch_size)
+                consecutive_errors = 0  # Reset on success
+                
+            except Exception as e:
+                if handle_api_error(e, "QA", batch_num):
+                    break
+                continue
+    
+    # Generate conversations in batches
+    if conversations > 0:
+        print(f"\nGenerating {conversations} conversations...")
+        for batch_start in range(0, conversations, conv_per_batch):
+            batch_size = min(conv_per_batch, conversations - batch_start)
+            batch_num = batch_start // conv_per_batch + 1
+            
+            # Create batch prompt
+            topics = [random.choice(TOPICS) for _ in range(batch_size)]
+            style_elements = random.sample(JON_STYLE_ELEMENTS, min(4, len(JON_STYLE_ELEMENTS)))
+            
+            prompt = f"""Generate {batch_size} conversations between User and Jon about these topics: {', '.join(topics)}
+
+Jon's persona:
+{Config.PERSONA}
+
+Style elements to incorporate:
+{' '.join([f"- {element}" for element in style_elements])}
+
+Format your response as a JSON array of conversation objects, each with:
+- "messages": Array of message objects with "role" (user/assistant) and "content"
+- "topic": The conversation topic
+
+Each conversation should have 3-4 exchanges. Keep Jon's responses authentic to his voice.
+Your response should be ONLY a valid JSON array."""
+
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-4-turbo-preview",
+                    messages=[{"role": "system", "content": prompt}],
+                    response_format={"type": "json_object"},
+                    temperature=0.7,
+                    max_tokens=2000
+                )
+                
+                try:
+                    result = json.loads(response.choices[0].message.content)
+                    batch_convs = result if isinstance(result, list) else result.get("conversations", [])
+                except json.JSONDecodeError as e:
+                    print(f"Error parsing JSON response in conversation batch {batch_num}: {e}")
+                    consecutive_errors += 1
+                    if consecutive_errors >= max_consecutive_errors:
+                        print("Too many JSON parsing errors. Stopping.")
+                        break
+                    time.sleep(2 ** consecutive_errors)
+                    continue
+                
+                # Process and validate each conversation
+                for conv in batch_convs:
+                    if isinstance(conv, dict) and "messages" in conv and len(conv["messages"]) >= 2:
+                        # Add metadata
+                        conv["metadata"] = {
+                            "topic": conv.get("topic", ""),
+                            "entities": extract_entities(" ".join(m["content"] for m in conv["messages"])),
+                            "topics": extract_topics(" ".join(m["content"] for m in conv["messages"])),
+                            "timestamp": datetime.now().isoformat(),
+                            "model": "gpt-4-turbo-preview",
+                            "version": "2.0",
+                            "generator": "jon_data_generator"
+                        }
+                        conversation_data.append(conv)
+                
+                track_api_call("conversation_batch_gen", response.usage.total_tokens, batch_size)
+                consecutive_errors = 0  # Reset on success
+                
+            except Exception as e:
+                if handle_api_error(e, "conversation", batch_num):
+                    break
+                continue
+    
+    # Generate statements in batches
+    if statements > 0:
+        print(f"\nGenerating {statements} statements...")
+        for batch_start in range(0, statements, stmt_per_batch):
+            batch_size = min(stmt_per_batch, statements - batch_start)
+            batch_num = batch_start // stmt_per_batch + 1
+            
+            # Create batch prompt
+            topics = [random.choice(TOPICS) for _ in range(batch_size)]
+            style_elements = random.sample(JON_STYLE_ELEMENTS, min(4, len(JON_STYLE_ELEMENTS)))
+            
+            prompt = f"""Generate {batch_size} standalone statements from Jon about these topics: {', '.join(topics)}
+
+Jon's persona:
+{Config.PERSONA}
+
+Style elements to incorporate:
+{' '.join([f"- {element}" for element in style_elements])}
+
+Format your response as a JSON array of statement objects, each with:
+- "statement": Jon's statement
+- "topic": The topic addressed
+
+Each statement should be 2-3 sentences in Jon's authentic voice.
+Your response should be ONLY a valid JSON array."""
+
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-4-turbo-preview",
+                    messages=[{"role": "system", "content": prompt}],
+                    response_format={"type": "json_object"},
+                    temperature=0.7,
+                    max_tokens=2000
+                )
+                
+                try:
+                    result = json.loads(response.choices[0].message.content)
+                    batch_stmts = result if isinstance(result, list) else result.get("statements", [])
+                except json.JSONDecodeError as e:
+                    print(f"Error parsing JSON response in statement batch {batch_num}: {e}")
+                    consecutive_errors += 1
+                    if consecutive_errors >= max_consecutive_errors:
+                        print("Too many JSON parsing errors. Stopping.")
+                        break
+                    time.sleep(2 ** consecutive_errors)
+                    continue
+                
+                # Process and validate each statement
+                for stmt in batch_stmts:
+                    if isinstance(stmt, dict) and "statement" in stmt and len(stmt["statement"]) >= 20:
+                        # Add metadata
+                        stmt["metadata"] = {
+                            "topic": stmt.get("topic", ""),
+                            "entities": extract_entities(stmt["statement"]),
+                            "topics": extract_topics(stmt["statement"]),
+                            "sentiment": "neutral",  # Default sentiment
+                            "timestamp": datetime.now().isoformat(),
+                            "model": "gpt-4-turbo-preview",
+                            "version": "2.0",
+                            "generator": "jon_data_generator"
+                        }
+                        statement_data.append(stmt)
+                
+                track_api_call("statement_batch_gen", response.usage.total_tokens, batch_size)
+                consecutive_errors = 0  # Reset on success
+                
+            except Exception as e:
+                if handle_api_error(e, "statement", batch_num):
+                    break
+                continue
+    
+    # Print generation status
     print("\nGeneration Status:")
     print(f"QA Pairs: {len(qa_data)}/{qa_pairs}")
     print(f"Conversations: {len(conversation_data)}/{conversations}")
@@ -1370,749 +1891,169 @@ def generate_with_batch_api(qa_pairs, conversations, statements, batch_size=15, 
     
     return qa_data, conversation_data, statement_data
 
-def verify_data_output(qa_data, conversation_data, statement_data, output_files):
-    """Verify the output files contain the expected data"""
-    print("\nVerifying output files...")
+def save_data(
+    qa_data: List[Dict[str, Any]],
+    conversation_data: List[Dict[str, Any]],
+    statement_data: List[Dict[str, Any]],
+    output_dir: str,
+    verify: bool = False
+) -> Dict[str, str]:
+    """
+    Save generated data in multiple formats.
     
-    # Check raw data
-    raw_file = output_files.get("raw_file")
-    if raw_file and os.path.exists(raw_file):
-        try:
-            with open(raw_file, 'r') as f:
-                raw_data = json.load(f)
-                qa_count = len(raw_data.get("qa_data", []))
-                conv_count = len(raw_data.get("conversation_data", []))
-                stmt_count = len(raw_data.get("statement_data", []))
-                
-                if qa_count == len(qa_data) and conv_count == len(conversation_data) and stmt_count == len(statement_data):
-                    print(f"✅ Raw data verified: {qa_count} QA pairs, {conv_count} conversations, {stmt_count} statements")
-                else:
-                    print(f"❌ Raw data verification failed: counts don't match")
-        except Exception as e:
-            print(f"❌ Raw data verification failed: {e}")
-    else:
-        print(f"❌ Raw data file not found or empty")
-    
-    # Check retrieval data
-    retrieval_file = output_files.get("retrieval_file")
-    if retrieval_file and os.path.exists(retrieval_file):
-        try:
-            with open(retrieval_file, 'r') as f:
-                lines = f.readlines()
-                retrieval_count = len(lines)
-                expected_count = len(qa_data) + len(statement_data)
-                
-                if retrieval_count >= expected_count:
-                    print(f"✅ Retrieval data verified: {retrieval_count} items")
-                else:
-                    print(f"❌ Retrieval data verification failed: {retrieval_count} items found, expected at least {expected_count}")
-        except Exception as e:
-            print(f"❌ Retrieval data verification failed: {e}")
-    else:
-        print(f"❌ Retrieval file not found or empty")
-    
-    # Check fine-tuning data
-    fine_tuning_file = output_files.get("fine_tuning_file")
-    if fine_tuning_file and os.path.exists(fine_tuning_file):
-        try:
-            with open(fine_tuning_file, 'r') as f:
-                lines = f.readlines()
-                ft_count = len(lines)
-                
-                if ft_count == len(conversation_data):
-                    print(f"✅ Fine-tuning data verified: {ft_count} conversations")
-                else:
-                    print(f"❌ Fine-tuning data verification failed: {ft_count} conversations found, expected {len(conversation_data)}")
-        except Exception as e:
-            print(f"❌ Fine-tuning data verification failed: {e}")
-    else:
-        print(f"❌ Fine-tuning file not found or empty")
-
-def save_data(qa_data, conversation_data, statement_data, output_dir=None, timestamp=None, verify=True):
-    """Save generated data in appropriate formats with validation and quality checks"""
-    if output_dir is None:
-        output_dir = "data_generation/output"
-    os.makedirs(output_dir, exist_ok=True)
-    
-    if timestamp is None:
+    Args:
+        qa_data: List of Q&A pairs
+        conversation_data: List of conversations
+        statement_data: List of statements
+        output_dir: Directory to save files
+        verify: Whether to verify the output data
+        
+    Returns:
+        Dictionary with paths to saved files
+    """
+    try:
+        os.makedirs(output_dir, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # Prepare file paths
-    raw_file = os.path.join(output_dir, f"jon_raw_data_{timestamp}.json")
-    retrieval_file = os.path.join(output_dir, f"jon_retrieval_data_{timestamp}.jsonl")
-    fine_tuning_file = os.path.join(output_dir, f"jon_fine_tuning_data_{timestamp}.jsonl")
-    
-    # Validate data before saving
-    validation_results = {
-        "qa_data": {"valid": 0, "invalid": 0, "errors": []},
-        "conversation_data": {"valid": 0, "invalid": 0, "errors": []},
-        "statement_data": {"valid": 0, "invalid": 0, "errors": []}
-    }
-    
-    # Validate QA data
-    for qa in qa_data:
-        try:
-            if not isinstance(qa, dict):
-                raise ValueError("Not a dictionary")
-            if "question" not in qa or "answer" not in qa:
-                raise ValueError("Missing required fields")
-            if len(qa["answer"]) < 20:
-                raise ValueError("Answer too short")
-            if "metadata" not in qa:
-                raise ValueError("Missing metadata")
-            validation_results["qa_data"]["valid"] += 1
-        except Exception as e:
-            validation_results["qa_data"]["invalid"] += 1
-            validation_results["qa_data"]["errors"].append(str(e))
-    
-    # Validate conversation data
-    for conv in conversation_data:
-        try:
-            if not isinstance(conv, dict):
-                raise ValueError("Not a dictionary")
-            if "messages" not in conv:
-                raise ValueError("Missing messages")
-            if len(conv["messages"]) < 2:
-                raise ValueError("Too few messages")
-            validation_results["conversation_data"]["valid"] += 1
-        except Exception as e:
-            validation_results["conversation_data"]["invalid"] += 1
-            validation_results["conversation_data"]["errors"].append(str(e))
-    
-    # Validate statement data
-    for stmt in statement_data:
-        try:
-            if not isinstance(stmt, dict):
-                raise ValueError("Not a dictionary")
-            if "statement" not in stmt:
-                raise ValueError("Missing statement")
-            if len(stmt["statement"]) < 10:
-                raise ValueError("Statement too short")
-            validation_results["statement_data"]["valid"] += 1
-        except Exception as e:
-            validation_results["statement_data"]["invalid"] += 1
-            validation_results["statement_data"]["errors"].append(str(e))
-    
-    # Print validation results
-    print("\nData Validation Results:")
-    for data_type, results in validation_results.items():
-        total = results["valid"] + results["invalid"]
-        if total > 0:
-            success_rate = (results["valid"] / total) * 100
-            print(f"\n{data_type}:")
-            print(f"Valid: {results['valid']}/{total} ({success_rate:.1f}%)")
-            if results["invalid"] > 0:
-                print(f"Invalid: {results['invalid']}")
-                print("Common errors:")
-                error_counts = defaultdict(int)
-                for error in results["errors"]:
-                    error_counts[error] += 1
-                for error, count in sorted(error_counts.items(), key=lambda x: x[1], reverse=True)[:3]:
-                    print(f"- {error}: {count} times")
-    
-    # Save raw data with validation results
-    raw_data = {
-        "version": "2.0",
-        "timestamp": timestamp,
-        "model": "gpt-4-turbo-preview",
-        "qa_count": len(qa_data),
-        "conversation_count": len(conversation_data),
-        "statement_count": len(statement_data),
-        "validation_results": validation_results,
-        "qa_data": qa_data,
-        "conversation_data": conversation_data,
-        "statement_data": statement_data
-    }
-    
-    try:
-        with open(raw_file, 'w') as f:
-            json.dump(raw_data, f, indent=2)
-    except Exception as e:
-        print(f"Error saving raw data: {e}")
-        return None
-    
-    # Format and save retrieval data
-    try:
-        retrieval_data = format_for_retrieval_store(qa_data, "qa_pair")
-        retrieval_data += "\n" + format_for_retrieval_store(statement_data, "statement")
         
-        with open(retrieval_file, 'w') as f:
-            f.write(retrieval_data)
-    except Exception as e:
-        print(f"Error saving retrieval data: {e}")
-        return None
-    
-    # Format and save fine-tuning data
-    try:
-        fine_tuning_data = format_for_fine_tuning(conversation_data)
+        # Save raw data
+        raw_data = {
+            "qa_data": qa_data,
+            "conversation_data": conversation_data,
+            "statement_data": statement_data,
+            "metadata": {
+                "timestamp": timestamp,
+                "version": "2.0",
+                "generator": "jon_data_generator"
+            }
+        }
         
-        with open(fine_tuning_file, 'w') as f:
-            f.write(fine_tuning_data)
-    except Exception as e:
-        print(f"Error saving fine-tuning data: {e}")
-        return None
-    
-    # Verify output files if requested
-    if verify:
-        verify_data_output(qa_data, conversation_data, statement_data, {
+        raw_file = os.path.join(output_dir, f"jon_data_raw_{timestamp}.json")
+        try:
+            with open(raw_file, 'w') as f:
+                json.dump(raw_data, f, indent=2)
+        except IOError as e:
+            print(f"Error saving raw data file: {e}")
+            raise
+        
+        # Save retrieval format
+        retrieval_data = []
+        
+        # Convert QA pairs
+        for qa in qa_data:
+            retrieval_data.append({
+                "text": f"Q: {qa['question']}\nA: {qa['answer']}",
+                "metadata": {
+                    "type": "qa_pair",
+                    "topics": qa.get("metadata", {}).get("topics", []),
+                    "version": "2.0"
+                }
+            })
+        
+        # Convert statements
+        for stmt in statement_data:
+            retrieval_data.append({
+                "text": stmt["statement"],
+                "metadata": {
+                    "type": "statement",
+                    "topics": stmt.get("metadata", {}).get("topics", []),
+                    "version": "2.0"
+                }
+            })
+        
+        retrieval_file = os.path.join(output_dir, f"jon_retrieval_data_{timestamp}.jsonl")
+        try:
+            with open(retrieval_file, 'w') as f:
+                for item in retrieval_data:
+                    f.write(json.dumps(item) + '\n')
+        except IOError as e:
+            print(f"Error saving retrieval data file: {e}")
+            raise
+        
+        # Save fine-tuning format
+        fine_tuning_data = []
+        
+        # Convert QA pairs
+        for qa in qa_data:
+            fine_tuning_data.append({
+                "messages": [
+                    {"role": "user", "content": qa["question"]},
+                    {"role": "assistant", "content": qa["answer"]}
+                ]
+            })
+        
+        # Add conversations
+        fine_tuning_data.extend(conversation_data)
+        
+        fine_tuning_file = os.path.join(output_dir, f"jon_fine_tuning_data_{timestamp}.jsonl")
+        try:
+            with open(fine_tuning_file, 'w') as f:
+                for item in fine_tuning_data:
+                    f.write(json.dumps(item) + '\n')
+        except IOError as e:
+            print(f"Error saving fine-tuning data file: {e}")
+            raise
+        
+        # Verify data if requested
+        if verify:
+            try:
+                # Add the project root to the Python path
+                project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+                if project_root not in sys.path:
+                    sys.path.insert(0, project_root)
+                
+                from data_generation.utils.test_jon_data import (
+                    test_qa_data,
+                    test_conversation_data,
+                    test_statement_data,
+                    test_retrieval_data
+                )
+                
+                print("\nVerifying generated data...")
+                verification_errors = []
+                
+                try:
+                    test_qa_data(qa_data)
+                except Exception as e:
+                    verification_errors.append(f"QA data verification failed: {e}")
+                
+                try:
+                    test_conversation_data(conversation_data)
+                except Exception as e:
+                    verification_errors.append(f"Conversation data verification failed: {e}")
+                
+                try:
+                    test_statement_data(statement_data)
+                except Exception as e:
+                    verification_errors.append(f"Statement data verification failed: {e}")
+                
+                try:
+                    test_retrieval_data(retrieval_file)
+                except Exception as e:
+                    verification_errors.append(f"Retrieval data verification failed: {e}")
+                
+                if verification_errors:
+                    print("\nVerification Warnings:")
+                    for error in verification_errors:
+                        print(f"- {error}")
+                    print("\nSome data verification checks failed. Please review the warnings above.")
+                else:
+                    print("\nAll data verification checks passed successfully.")
+                
+            except ImportError as e:
+                print(f"Warning: Could not import test functions: {e}")
+                print("Skipping data verification.")
+            except Exception as e:
+                print(f"Warning: Error during data verification: {e}")
+                print("Skipping data verification.")
+        
+        return {
             "raw_file": raw_file,
             "retrieval_file": retrieval_file,
             "fine_tuning_file": fine_tuning_file
-        })
-    
-    return {
-        "raw_file": raw_file,
-        "retrieval_file": retrieval_file,
-        "fine_tuning_file": fine_tuning_file,
-        "validation_results": validation_results
-    }
-
-def save_checkpoint(qa_data, conversation_data, statement_data, checkpoint_dir, batch_num=None):
-    """Save a checkpoint of the generated data
-    
-    Args:
-        qa_data: List of QA data items
-        conversation_data: List of conversation data items
-        statement_data: List of statement data items
-        checkpoint_dir: Directory to save checkpoint in
-        batch_num: Optional batch number to include in filename
-        
-    Returns:
-        Path to the checkpoint file
-    """
-    # Create checkpoint directory if needed
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    
-    # Generate timestamp for checkpoint filename
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # Create checkpoint filename
-    batch_suffix = f"_batch{batch_num}" if batch_num is not None else ""
-    checkpoint_filename = f"jon_checkpoint_{timestamp}{batch_suffix}_{len(qa_data)}qa_{len(conversation_data)}conv_{len(statement_data)}stmt.json"
-    checkpoint_path = os.path.join(checkpoint_dir, checkpoint_filename)
-    
-    try:
-        checkpoint_data = {
-            'qa_data': qa_data,
-            'conversation_data': conversation_data,
-            'statement_data': statement_data,
-            'timestamp': datetime.now().isoformat(),
-            'api_calls': api_calls,
-            'metadata': {
-                'qa_count': len(qa_data),
-                'conversation_count': len(conversation_data),
-                'statement_count': len(statement_data)
-            }
         }
-        
-        with open(checkpoint_path, 'w') as f:
-            json.dump(checkpoint_data, f)
-        
-        print(f"\nCheckpoint saved to {checkpoint_path}")
-        return checkpoint_path
     except Exception as e:
-        print(f"Error saving checkpoint: {e}")
-        return None
-        
-def load_checkpoint(checkpoint_path):
-    """Load data from a checkpoint file
-    
-    Args:
-        checkpoint_path: Path to the checkpoint file
-        
-    Returns:
-        Dictionary containing the checkpoint data or None if loading failed
-    """
-    try:
-        with open(checkpoint_path, 'r') as f:
-            checkpoint_data = json.load(f)
-            
-        # Validate the checkpoint data
-        if not isinstance(checkpoint_data, dict):
-            print(f"Error: Checkpoint file does not contain a valid dictionary")
-            return None
-            
-        required_keys = ['qa_data', 'conversation_data', 'statement_data']
-        if not all(key in checkpoint_data for key in required_keys):
-            print(f"Error: Checkpoint file is missing required keys: {', '.join(required_keys)}")
-            return None
-            
-        # Update global api_calls counter if available
-        if 'api_calls' in checkpoint_data:
-            global api_calls
-            api_calls.update(checkpoint_data['api_calls'])
-            
-        return checkpoint_data
-    except Exception as e:
-        print(f"Error loading checkpoint: {e}")
-        return None
-
-def get_memory_usage():
-    """Get current memory usage in MB"""
-    if HAVE_PSUTIL:
-        process = psutil.Process(os.getpid())
-        return process.memory_info().rss / 1024 / 1024  # MB
-    return 0
-
-def log_memory(stage_name):
-    """Log memory usage at a given stage of execution
-    
-    Args:
-        stage_name: Name of the current processing stage
-    """
-    if not MEMORY_TRACKING or not HAVE_PSUTIL:
-        return
-        
-    try:
-        memory_usage = get_memory_usage()
-        timestamp = datetime.now().isoformat()
-        
-        # Create log entry
-        log_entry = {
-            "timestamp": timestamp,
-            "stage": stage_name,
-            "memory_mb": memory_usage,
-            "memory_gb": memory_usage / 1024
-        }
-        
-        # Print memory usage
-        print(f"Memory usage at {stage_name}: {memory_usage:.2f} MB ({memory_usage/1024:.3f} GB)")
-        
-        # Log to file if memory_logs directory exists
-        log_dir = os.path.join(OUTPUT_DIR, "memory_logs")
-        if os.path.exists(log_dir):
-            log_file = os.path.join(log_dir, f"memory_log_{datetime.now().strftime('%Y%m%d')}.jsonl")
-            with open(log_file, 'a') as f:
-                f.write(json.dumps(log_entry) + "\n")
-    except Exception as e:
-        print(f"Error logging memory: {e}")
-
-def find_latest_checkpoint(checkpoint_dir):
-    """Find the latest checkpoint file in the given directory
-    
-    Args:
-        checkpoint_dir: Directory to search for checkpoint files
-        
-    Returns:
-        Path to the latest checkpoint file or None if no checkpoints found
-    """
-    if not os.path.exists(checkpoint_dir):
-        return None
-        
-    checkpoint_files = glob.glob(os.path.join(checkpoint_dir, "jon_checkpoint_*.json"))
-    if not checkpoint_files:
-        return None
-        
-    # Sort by modification time, newest first
-    checkpoint_files.sort(key=os.path.getmtime, reverse=True)
-    return checkpoint_files[0]
-
-def generate_bulk_qa_pairs(count: int, batch_size: int = 15) -> List[Dict[str, Any]]:
-    """Generate multiple Q&A pairs in batches
-    
-    Args:
-        count: Number of Q&A pairs to generate
-        batch_size: Number of pairs per batch
-        
-    Returns:
-        List of Q&A pairs with metadata
-    """
-    qa_pairs = []
-    failed_attempts = 0
-    max_failed_attempts = 3
-    consecutive_failures = 0
-    max_consecutive_failures = 3
-    quality_metrics = {
-        "total_attempts": 0,
-        "successful_pairs": 0,
-        "failed_pairs": 0,
-        "avg_length": 0,
-        "topic_distribution": defaultdict(int),
-        "entity_distribution": defaultdict(int)
-    }
-    
-    # Calculate number of batches
-    num_batches = (count + batch_size - 1) // batch_size
-    
-    # Create progress bar
-    pbar = tqdm(total=count, desc="Generating Q&A pairs")
-    
-    for batch_num in range(num_batches):
-        # Calculate batch size
-        remaining = count - len(qa_pairs)
-        current_batch_size = min(batch_size, remaining)
-        
-        # Skip if we've hit too many failures
-        if failed_attempts >= max_failed_attempts or consecutive_failures >= max_consecutive_failures:
-            print(f"\nStopping after {failed_attempts} failed attempts and {consecutive_failures} consecutive failures")
-            break
-            
-        try:
-            # Generate batch
-            batch_pairs = []
-            batch_metrics = {
-                "successful": 0,
-                "failed": 0,
-                "total_length": 0
-            }
-            
-            for i in range(current_batch_size):
-                quality_metrics["total_attempts"] += 1
-                try:
-                    # Add exponential backoff for rate limiting
-                    if consecutive_failures > 0:
-                        backoff_time = min(2 ** consecutive_failures, 30)  # Cap at 30 seconds
-                        pbar.set_description(f"Rate limit backoff: waiting {backoff_time}s...")
-                        time.sleep(backoff_time)
-                    
-                    qa_pair = generate_qa_pair(
-                        max_retries=2,
-                        temperature=0.7,
-                        max_tokens=1000
-                    )
-                    
-                    if qa_pair and "question" in qa_pair and "answer" in qa_pair:
-                        # Validate quality
-                        if len(qa_pair["answer"]) < 20:
-                            raise ValueError("Answer too short")
-                        
-                        # Update metrics
-                        batch_metrics["successful"] += 1
-                        batch_metrics["total_length"] += len(qa_pair["answer"])
-                        
-                        # Track topics and entities
-                        for topic in qa_pair["metadata"]["topics"]:
-                            quality_metrics["topic_distribution"][topic] += 1
-                        for entity in qa_pair["metadata"]["entities"]:
-                            quality_metrics["entity_distribution"][entity] += 1
-                        
-                        batch_pairs.append(qa_pair)
-                        consecutive_failures = 0  # Reset on success
-                    else:
-                        raise ValueError("Invalid Q&A pair format")
-                        
-                except Exception as e:
-                    print(f"\nError generating Q&A pair in batch {batch_num}, item {i}: {e}")
-                    batch_metrics["failed"] += 1
-                    consecutive_failures += 1
-                    continue
-            
-            # Add successful pairs
-            if batch_pairs:
-                qa_pairs.extend(batch_pairs)
-                failed_attempts = 0  # Reset counter on success
-                consecutive_failures = 0  # Reset consecutive failures
-                
-                # Update progress
-                pbar.update(len(batch_pairs))
-                pbar.set_description(f"Generated {len(qa_pairs)}/{count} pairs")
-            else:
-                failed_attempts += 1
-                consecutive_failures += 1
-                print(f"\nBatch {batch_num} failed to generate any pairs")
-            
-            # Add small delay between batches to avoid rate limits
-            time.sleep(1)
-            
-        except Exception as e:
-            print(f"\nError in batch {batch_num}: {e}")
-            failed_attempts += 1
-            consecutive_failures += 1
-            continue
-    
-    # Close progress bar
-    pbar.close()
-    
-    # Calculate final metrics
-    quality_metrics["successful_pairs"] = len(qa_pairs)
-    quality_metrics["failed_pairs"] = quality_metrics["total_attempts"] - len(qa_pairs)
-    
-    if qa_pairs:
-        total_length = sum(len(pair["answer"]) for pair in qa_pairs)
-        quality_metrics["avg_length"] = total_length / len(qa_pairs)
-    
-    # Print final status with quality metrics
-    print(f"\nQ&A Generation Complete:")
-    print(f"Successfully generated: {len(qa_pairs)}/{count} pairs")
-    print(f"Failed attempts: {failed_attempts}")
-    print(f"Consecutive failures: {consecutive_failures}")
-    print(f"\nQuality Metrics:")
-    print(f"Total attempts: {quality_metrics['total_attempts']}")
-    print(f"Success rate: {(quality_metrics['successful_pairs'] / quality_metrics['total_attempts'] * 100):.1f}%")
-    print(f"Average answer length: {quality_metrics['avg_length']:.1f} characters")
-    
-    # Print top topics and entities
-    print("\nTop Topics:")
-    for topic, count in sorted(quality_metrics["topic_distribution"].items(), key=lambda x: x[1], reverse=True)[:5]:
-        print(f"- {topic}: {count}")
-    
-    print("\nTop Entities:")
-    for entity, count in sorted(quality_metrics["entity_distribution"].items(), key=lambda x: x[1], reverse=True)[:5]:
-        print(f"- {entity}: {count}")
-    
-    return qa_pairs
-
-def build_prompt(topic: Optional[str] = None, style: str = "casual", use_real_data: bool = True) -> str:
-    """Build a prompt for generating a Q&A pair
-    
-    Args:
-        topic: Optional topic to focus on
-        style: Response style (casual, formal, etc.)
-        use_real_data: Whether to use real Jon examples
-        
-    Returns:
-        Prompt string for the API
-    """
-    # Get real Jon examples if requested
-    real_examples = ""
-    if use_real_data and JON_REAL_MESSAGES:
-        # Use cached messages if available
-        real_examples = "\nReal Jon examples:\n" + "\n".join(JON_REAL_MESSAGES[:2])  # Limit to 2 examples
-    
-    # Select topic and related topics for context
-    if not topic:
-        # Select a random topic cluster
-        cluster = random.choice(list(TOPIC_CLUSTERS.keys()))
-        topic = random.choice(TOPIC_CLUSTERS[cluster])
-        related_topics = [t for t in TOPIC_CLUSTERS[cluster] if t != topic][:2]
-    else:
-        # Find related topics from the same cluster
-        related_topics = []
-        for cluster, topics in TOPIC_CLUSTERS.items():
-            if topic in topics:
-                related_topics = [t for t in topics if t != topic][:2]
-                break
-    
-    # Select style elements based on topic and mood
-    style_elements = []
-    if style == "casual":
-        style_elements = random.sample([e for e in JON_STYLE_ELEMENTS if "lowercase" in e or "minimal punctuation" in e], 2)
-    else:
-        style_elements = random.sample(JON_STYLE_ELEMENTS, 2)
-    
-    # Add Jon's persona for context
-    persona = Config.PERSONA
-    
-    # Build the prompt with enhanced context
-    prompt = f"""You are Jon. Generate a question and answer pair about {topic}.
-
-{persona}
-
-{real_examples}
-
-Your response should:
-1. Be in Jon's authentic voice
-2. Include these style elements:
-{' '.join([f"- {element}" for element in style_elements])}
-3. Be formatted exactly as:
-Q: [user's question]
-A: [jon's answer]
-
-Keep the response concise and natural. Make sure Jon's answer reflects his personality and writing style."""
-    
-    return prompt
-
-def format_for_retrieval_store(data: List[Dict[str, Any]], data_type: str) -> str:
-    """Format data for the retrieval store
-    
-    Args:
-        data: List of data items (QA pairs or statements)
-        data_type: Type of data ("qa_pair" or "statement")
-        
-    Returns:
-        JSONL formatted string
-    """
-    formatted_data = []
-    
-    for item in data:
-        if data_type == "qa_pair":
-            # Format Q&A pair
-            text = f"Q: {item.get('question', '')}\nA: {item.get('answer', '')}"
-            metadata = item.get("metadata", {})
-            metadata["type"] = "qa_pair"
-            
-            formatted_item = {
-                "text": text,
-                "metadata": metadata
-            }
-            
-        elif data_type == "statement":
-            # Format statement
-            text = item.get("statement", "")
-            metadata = item.get("metadata", {})
-            metadata["type"] = "statement"
-            
-            formatted_item = {
-                "text": text,
-                "metadata": metadata
-            }
-        
-        formatted_data.append(json.dumps(formatted_item))
-    
-    return "\n".join(formatted_data)
-
-def format_for_fine_tuning(conversations: List[Dict[str, Any]]) -> str:
-    """Format conversations for fine-tuning
-    
-    Args:
-        conversations: List of conversation data
-        
-    Returns:
-        JSONL formatted string for fine-tuning
-    """
-    formatted_data = []
-    
-    for conv in conversations:
-        messages = conv.get("messages", [])
-        if not messages:
-            continue
-            
-        # Format each message pair as a training example
-        for i in range(0, len(messages) - 1, 2):
-            user_msg = messages[i]
-            assistant_msg = messages[i + 1] if i + 1 < len(messages) else None
-            
-            if not assistant_msg:
-                continue
-                
-            training_example = {
-                "messages": [
-                    {"role": "system", "content": Config.PERSONA},
-                    {"role": "user", "content": user_msg.get("content", "")},
-                    {"role": "assistant", "content": assistant_msg.get("content", "")}
-                ]
-            }
-            
-            formatted_data.append(json.dumps(training_example))
-    
-    return "\n".join(formatted_data)
-
-def extract_entities(text: str) -> List[str]:
-    """Extract entities from text using predefined entity lists"""
-    entities = []
-    text_lower = text.lower()
-    
-    # Check for each entity type
-    for entity_type, entity_list in ENTITIES.items():
-        for entity in entity_list:
-            if entity.lower() in text_lower:
-                entities.append(entity)
-    
-    return list(set(entities))
-
-def extract_topics(text: str) -> List[str]:
-    """Extract topics from text using predefined topic lists"""
-    topics = []
-    text_lower = text.lower()
-    
-    # Check each topic
-    for topic in TOPICS:
-        if topic.lower() in text_lower:
-            topics.append(topic)
-    
-    return list(set(topics))
-
-def generate_conversation(
-    topic: Optional[str] = None,
-    style: str = "casual",
-    use_real_data: bool = True,
-    max_retries: int = 3,
-    temperature: float = 0.7,
-    max_tokens: int = 1000,
-    client: Optional[OpenAI] = None
-) -> Dict[str, Any]:
-    """Generate a single conversation with metadata.
-    
-    Args:
-        topic: Optional topic to focus on
-        style: Response style (default: casual)
-        use_real_data: Whether to use real data examples
-        max_retries: Maximum number of retries
-        temperature: Response variability
-        max_tokens: Maximum tokens in response
-        client: Optional OpenAI client
-        
-    Returns:
-        Dictionary containing the conversation and metadata
-    """
-    # Use global client if none provided
-    if client is None:
-        client = globals()["client"]
-    
-    # Build prompt with real data examples if enabled
-    prompt = build_prompt(topic, style, use_real_data)
-    
-    # Track API usage
-    track_api_call("conversation_gen_start")
-    
-    for attempt in range(max_retries + 1):
-        try:
-            # Generate response with exponential backoff
-            if attempt > 0:
-                backoff_time = min(2 ** attempt, 30)  # Cap at 30 seconds
-                print(f"Retry attempt {attempt}/{max_retries}, waiting {backoff_time} seconds...")
-                time.sleep(backoff_time)
-            
-            response = client.chat.completions.create(
-                model="gpt-4-turbo-preview",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=temperature,
-                max_tokens=max_tokens
-            )
-            
-            # Track successful API call
-            track_api_call("conversation_gen", response.usage.total_tokens)
-            
-            # Parse response
-            content = response.choices[0].message.content
-            
-            # Extract messages with improved regex
-            message_pattern = r"(?:User|Assistant):\s*(.*?)(?=\n(?:User|Assistant):|$)"
-            messages = re.findall(message_pattern, content, re.DOTALL | re.IGNORECASE)
-            
-            if not messages or len(messages) < 2:
-                raise ValueError("Could not extract enough messages from response")
-            
-            # Format messages
-            formatted_messages = []
-            for i, msg in enumerate(messages):
-                role = "user" if i % 2 == 0 else "assistant"
-                formatted_messages.append({
-                    "role": role,
-                    "content": msg.strip()
-                })
-            
-            # Extract entities and topics from all messages
-            all_content = " ".join(msg["content"] for msg in formatted_messages)
-            entities = extract_entities(all_content)
-            topics = extract_topics(all_content)
-            
-            # Generate metadata
-            metadata = {
-                "timestamp": datetime.now().isoformat(),
-                "model": "gpt-4-turbo-preview",
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                "style": style,
-                "entities": entities,
-                "topics": topics,
-                "version": "2.0",
-                "generator": "jon_data_generator",
-                "attempt": attempt + 1
-            }
-            
-            return {
-                "messages": formatted_messages,
-                "metadata": metadata
-            }
-            
-        except Exception as e:
-            print(f"Error generating conversation (attempt {attempt + 1}/{max_retries + 1}): {e}")
-            if attempt == max_retries:
-                raise
-            continue
-    
-    raise Exception(f"Failed to generate conversation after {max_retries + 1} attempts")
+        print(f"Error in save_data: {e}")
+        raise
 
 def main(args=None):
     """Main entry point for the data generator"""
@@ -2149,54 +2090,61 @@ def main(args=None):
     print(f"Output directory: {OUTPUT_DIR}")
     print("="*60 + "\n")
     
-    # Generate data
-    if args.one_shot:
-        # Use one-shot bulk generation
-        data = generate_one_shot_bulk(
-            qa_count=args.qa_pairs,
-            conv_count=args.conversations,
-            stmt_count=args.statements,
-            use_real_data=args.use_real_data
+    try:
+        # Generate data
+        if args.one_shot:
+            # Use one-shot bulk generation
+            data = generate_one_shot_bulk(
+                qa_count=args.qa_pairs,
+                conv_count=args.conversations,
+                stmt_count=args.statements,
+                use_real_data=args.use_real_data
+            )
+            qa_data = data["qa_data"]
+            conversation_data = data["conversation_data"]
+            statement_data = data["statement_data"]
+        else:
+            # Use batch API
+            qa_data, conversation_data, statement_data = generate_with_batch_api(
+                qa_pairs=args.qa_pairs,
+                conversations=args.conversations,
+                statements=args.statements,
+                batch_size=args.batch_size,
+                max_concurrent=args.max_concurrent,
+                use_real_data=args.use_real_data
+            )
+        
+        # Save data
+        output_files = save_data(
+            qa_data=qa_data,
+            conversation_data=conversation_data,
+            statement_data=statement_data,
+            output_dir=OUTPUT_DIR,
+            verify=args.verify
         )
-        qa_data = data["qa_data"]
-        conversation_data = data["conversation_data"]
-        statement_data = data["statement_data"]
-    else:
-        # Use batch API
-        qa_data, conversation_data, statement_data = generate_with_batch_api(
-            qa_pairs=args.qa_pairs,
-            conversations=args.conversations,
-            statements=args.statements,
-            batch_size=args.batch_size,
-            max_concurrent=args.max_concurrent,
-            use_real_data=args.use_real_data
-        )
-    
-    # Save data
-    output_files = save_data(
-        qa_data=qa_data,
-        conversation_data=conversation_data,
-        statement_data=statement_data,
-        output_dir=OUTPUT_DIR,
-        verify=args.verify
-    )
-    
-    print("\nGeneration complete!")
-    print(f"Raw data saved to: {output_files['raw_file']}")
-    print(f"Retrieval data saved to: {output_files['retrieval_file']}")
-    print(f"Fine-tuning data saved to: {output_files['fine_tuning_file']}")
-    
-    # Print API usage statistics
-    print("\nAPI Usage Statistics:")
-    print(f"Total API calls: {api_calls['total_calls']}")
-    print(f"Total tokens used: {api_calls['total_tokens']}")
-    print(f"Estimated cost: ${api_calls['total_cost']:.2f}")
-    print(f"Batched calls: {api_calls['batched_calls']}")
-    print(f"Individual calls: {api_calls['individual_calls']}")
-    if api_calls['errors']:
-        print(f"\nErrors encountered: {len(api_calls['errors'])}")
-        for error in api_calls['errors'][:5]:  # Show first 5 errors
-            print(f"- {error}")
+        
+        print("\nGeneration complete!")
+        print(f"Raw data saved to: {output_files['raw_file']}")
+        print(f"Retrieval data saved to: {output_files['retrieval_file']}")
+        print(f"Fine-tuning data saved to: {output_files['fine_tuning_file']}")
+        
+        # Print API usage statistics
+        print("\nAPI Usage Statistics:")
+        print(f"Total API calls: {api_calls['total_calls']}")
+        print(f"Total tokens used: {api_calls['total_tokens']}")
+        print(f"Estimated cost: ${api_calls['total_cost']:.2f}")
+        print(f"Batched calls: {api_calls['batched_calls']}")
+        print(f"Individual calls: {api_calls['individual_calls']}")
+        if api_calls['errors']:
+            print(f"\nErrors encountered: {len(api_calls['errors'])}")
+            for error in api_calls['errors'][:5]:  # Show first 5 errors
+                print(f"- {error}")
+                
+    except Exception as e:
+        print(f"\nError in main: {e}")
+        print("Stack trace:")
+        traceback.print_exc()
+        sys.exit(1)
 
 if __name__ == "__main__":
     main() 
