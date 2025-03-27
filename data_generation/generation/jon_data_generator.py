@@ -583,6 +583,17 @@ def analyze_data_quality(data_items, item_type="qa"):
     Returns:
         Quality metrics dictionary
     """
+    # Return early with default metrics if no data
+    if not data_items:
+        console.print("[yellow]Warning: No data items to analyze[/yellow]")
+        return {
+            "vocabulary_richness": 0,
+            "metadata_completeness": 0,
+            "typo_frequency": 0,
+            "laughter_markers": 0,
+            "avg_token_count": 0,
+        }
+    
     metrics = {
         "token_counts": [],
         "topic_distribution": {},
@@ -599,7 +610,6 @@ def analyze_data_quality(data_items, item_type="qa"):
         "apostrophe_omission": 0,
         "ellipsis_usage": 0,
         "laughter_markers": 0,
-        "real_data_comparison": {}
     }
     
     all_text = ""
@@ -628,11 +638,19 @@ def analyze_data_quality(data_items, item_type="qa"):
             metrics["token_counts"].append(token_count)
             
             # Topic distribution
+            if "metadata" in item and "topics" in item["metadata"]:
+                topics = item["metadata"]["topics"]
+                if isinstance(topics, list):
+                    for topic in topics:
+                        metrics["topic_distribution"][topic] = metrics["topic_distribution"].get(topic, 0) + 1
+            
+            # Also check the singular "topic" field for backward compatibility
             if "metadata" in item and "topic" in item["metadata"]:
                 topic = item["metadata"]["topic"]
-                metrics["topic_distribution"][topic] = metrics["topic_distribution"].get(topic, 0) + 1
+                if isinstance(topic, str):
+                    metrics["topic_distribution"][topic] = metrics["topic_distribution"].get(topic, 0) + 1
             
-            # Sentiment distribution
+            # Sentiment distribution - only process if present
             if "metadata" in item and "sentiment" in item["metadata"]:
                 sentiment = item["metadata"]["sentiment"]
                 metrics["sentiment_distribution"][sentiment] = metrics["sentiment_distribution"].get(sentiment, 0) + 1
@@ -650,15 +668,17 @@ def analyze_data_quality(data_items, item_type="qa"):
                 "statement": ["statement", "metadata"]
             }
             
-            missing_fields = [field for field in required_fields[item_type] if field not in item]
-            if missing_fields:
-                metrics["validation_errors"].append(f"Missing required fields: {missing_fields}")
+            item_fields = required_fields.get(item_type, [])
+            if item_fields:
+                missing_fields = [field for field in item_fields if field not in item]
+                if missing_fields:
+                    metrics["validation_errors"].append(f"Missing required fields: {missing_fields}")
             
             # Style consistency check
             if item_type == "qa":
                 # Check for Jon's style in answers
                 style_markers = ["lowercase", "minimal punctuation", "casual tone"]
-                style_score = sum(1 for marker in style_markers if any(marker in text.lower()))
+                style_score = sum(1 for marker in style_markers if any(marker in text.lower() for char in marker))
                 metrics["style_consistency"] += style_score / len(style_markers)
             
             all_text += text + " "
@@ -674,11 +694,12 @@ def analyze_data_quality(data_items, item_type="qa"):
         except Exception as e:
             metrics["error_count"] += 1
             metrics["validation_errors"].append(f"Error processing item: {str(e)}")
+            console.print(f"[red]Error in data quality analysis: {e}[/red]")
     
     # Calculate final metrics
     if valid_items > 0:
         # Average token count
-        metrics["avg_token_count"] = sum(metrics["token_counts"]) / len(metrics["token_counts"])
+        metrics["avg_token_count"] = sum(metrics["token_counts"]) / len(metrics["token_counts"]) if metrics["token_counts"] else 0
         
         # Topic distribution percentage
         total_topics = sum(metrics["topic_distribution"].values())
@@ -702,10 +723,10 @@ def analyze_data_quality(data_items, item_type="qa"):
         metrics["vocabulary_richness"] = len(unique_words) / len(words) if words else 0
         
         # Metadata completeness
-        metrics["metadata_completeness"] = (valid_items - metrics["error_count"]) / valid_items * 100
+        metrics["metadata_completeness"] = (valid_items - metrics["error_count"]) / valid_items * 100 if valid_items else 0
         
         # Style consistency average
-        metrics["style_consistency"] = metrics["style_consistency"] / valid_items * 100
+        metrics["style_consistency"] = metrics["style_consistency"] / valid_items * 100 if valid_items else 0
         
         # Redundancy score (based on text similarity)
         if len(data_items) > 1:
@@ -725,26 +746,31 @@ def analyze_data_quality(data_items, item_type="qa"):
             for key in ["typo_frequency", "abbreviation_rate", "apostrophe_omission",
                        "ellipsis_usage", "laughter_markers"]:
                 metrics[key] = metrics[key]/num_items
-            
-            # Create comparison report
-            metrics["real_data_comparison"] = {
-                "metric": ["Typos/Message", "Abbreviations", "Missing Apostrophes",
-                          "Ellipsis Usage", "Laughter Markers"],
-                "real_data": [
-                    real_benchmarks["typo_frequency"],
-                    real_benchmarks["abbreviation_rate"],
-                    real_benchmarks["apostrophe_omission"],
-                    real_benchmarks["ellipsis_usage"],
-                    real_benchmarks["laughter_markers"]
-                ],
-                "generated_data": [
-                    metrics["typo_frequency"],
-                    metrics["abbreviation_rate"],
-                    metrics["apostrophe_omission"], 
-                    metrics["ellipsis_usage"],
-                    metrics["laughter_markers"]
-                ]
-            }
+        
+        # Only add comparison if we have real style metrics
+        if real_benchmarks and all(key in real_benchmarks for key in ["typo_frequency", "laughter_markers"]):
+            try:
+                comparison_data = {
+                    "metric": ["Typos/Message", "Abbreviations", "Missing Apostrophes",
+                              "Ellipsis Usage", "Laughter Markers"],
+                    "real_data": [
+                        real_benchmarks.get("typo_frequency", 0),
+                        real_benchmarks.get("abbreviation_rate", 0),
+                        real_benchmarks.get("apostrophe_omission", 0), 
+                        real_benchmarks.get("ellipsis_usage", 0),
+                        real_benchmarks.get("laughter_markers", 0)
+                    ],
+                    "generated_data": [
+                        metrics["typo_frequency"],
+                        metrics["abbreviation_rate"],
+                        metrics["apostrophe_omission"], 
+                        metrics["ellipsis_usage"],
+                        metrics["laughter_markers"]
+                    ]
+                }
+                metrics["real_data_comparison"] = comparison_data
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not create real data comparison: {e}[/yellow]")
     
     # Convert sets to lists for JSON serialization
     metrics["unique_entities"] = list(metrics["unique_entities"])
